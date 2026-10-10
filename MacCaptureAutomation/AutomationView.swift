@@ -20,6 +20,13 @@ struct AutomationView: View {
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)
             }.disabled(automation.running)
+            Button("1回だけ実行：撮影→貼り付け→背景設定") {
+                automation.start(capture: capture, transfer: true, setBackground: true)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || capture.busy)
+            Text("背景設定後は手動確認待ちで停止します。ページ送り・繰り返しは行いません。Chromeの編集キャンバスを選択してから実行してください。")
+                .foregroundStyle(.secondary)
             HStack {
                 Button("1回だけ実行：撮影→貼り付け") { automation.start(capture: capture, transfer: true) }
                     .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || capture.busy)
@@ -30,7 +37,7 @@ struct AutomationView: View {
             if automation.pasteUncertain {
                 Text("貼り付け済みの可能性があります。結果を確認し、不要な画像があれば手動で削除してください。確認前の再実行はできません。")
                     .foregroundStyle(.orange)
-                Button("貼り付け結果を確認済み") { automation.acknowledgePaste() }.disabled(automation.running)
+                Button("貼り付け結果を確認済み") { automation.acknowledgePaste() }.disabled(automation.running || automation.backgroundUncertain)
             }
             GroupBox("背景設定テスト") {
                 VStack(alignment: .leading, spacing: 12) {
