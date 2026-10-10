@@ -39,7 +39,7 @@ struct AutomationView: View {
                         .disabled(automation.running || automation.backgroundUncertain || capture.busy)
                     Button("メニューを手動で開いてテスト") { automation.testBackground(capture: capture, manualMenu: true) }
                         .disabled(automation.running || automation.backgroundUncertain || capture.busy)
-                    Text("通常テストで選択画像を取得できない場合は手動メニュー方式を使用します。Chromeに切り替わった後、5秒以内に選択画像を右クリックしてください。")
+                    Text("通常テストで選択画像を取得できない場合は手動メニュー方式を使用します。Chromeに切り替わった後、5秒以内に選択画像を右クリックしてください。項目の実行操作が公開されない場合は、AXで取得した位置を検証してクリックします。")
                         .foregroundStyle(.secondary)
                     if automation.backgroundUncertain {
                         Text("結果を確認してください：選択枠が消え、画像をクリックしても画像オブジェクトとして選択されず、スライド全面の背景になっていますか？結果不明なら再実行しないでください。")

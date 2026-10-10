@@ -305,6 +305,52 @@ extension AutomationModel {
         }
         return matches
     }
+    private func menuClickEvents(_ item: AXUIElement) throws -> (CGEvent, CGEvent) {
+        let title = axString(item, "AXTitle").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard axString(item, "AXRole") == "AXMenuItem",
+              ["画像を背景に設定", "Set image as background"].contains(title),
+              (axValue(item, "AXEnabled") as? Bool) == true,
+              let positionValue = axValue(item, "AXPosition"),
+              let sizeValue = axValue(item, "AXSize"),
+              CFGetTypeID(positionValue) == AXValueGetTypeID(),
+              CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+            throw AutomationFailure(message: "背景設定項目の有効状態・位置・サイズを確認できません。クリックしていません。")
+        }
+        let position = unsafeBitCast(positionValue, to: AXValue.self)
+        let size = unsafeBitCast(sizeValue, to: AXValue.self)
+        var point = CGPoint.zero
+        var dimensions = CGSize.zero
+        guard AXValueGetValue(position, .cgPoint, &point),
+              AXValueGetValue(size, .cgSize, &dimensions),
+              point.x.isFinite, point.y.isFinite,
+              dimensions.width.isFinite, dimensions.height.isFinite,
+              dimensions.width > 0, dimensions.height > 0 else {
+            throw AutomationFailure(message: "背景設定項目の座標が無効です。クリックしていません。")
+        }
+        // AXPosition and CGEvent both use global top-left point coordinates.
+        let center = CGPoint(x: point.x + dimensions.width / 2, y: point.y + dimensions.height / 2)
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(center.x), Float(center.y), &hit) == .success,
+              var current = hit else {
+            throw AutomationFailure(message: "背景設定項目の位置をヒットテストで確認できません。クリックしていません。")
+        }
+        var matches = false
+        for _ in 0..<12 {
+            if CFEqual(current, item) { matches = true; break }
+            guard let parent = axValue(current, "AXParent"), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            current = unsafeBitCast(parent, to: AXUIElement.self)
+        }
+        guard matches else {
+            throw AutomationFailure(message: "背景設定項目の位置が別の要素に重なっています。クリックしていません。")
+        }
+        guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
+              let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) else {
+            throw AutomationFailure(message: "クリックイベントを作成できません。")
+        }
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        return (down, up)
+    }
     func testBackground(capture: CaptureModel, manualMenu: Bool = false) {
         guard !running, !capture.busy else { return }
         guard !backgroundUncertain else { capture.record("前回の背景設定の結果を確認してから再テストしてください。"); return }
@@ -350,22 +396,27 @@ extension AutomationModel {
                 }
                 // Chrome menu items can expose AXConfirm, AXPick, or AXPress.
                 // AXShowMenu and AXCancel must never be treated as selection actions.
-                guard let action = ["AXConfirm", "AXPick", "AXPress"].first(where: { names.contains($0) }) else {
-                    let published = names.isEmpty ? "なし" : names.joined(separator: ", ")
-                    throw AutomationFailure(message: "背景設定メニューにAXConfirm/AXPick/AXPressがありません。公開操作: \(published)。操作は実行していません。")
-                }
-                capture.record("背景設定メニューの公開操作: \(names.joined(separator: ", "))。使用操作: \(action)")
+                let action = ["AXConfirm", "AXPick", "AXPress"].first(where: { names.contains($0) })
+                capture.record("背景設定メニューの公開操作: \(names.joined(separator: ", "))。使用操作: \(action ?? "AX位置に基づくクリック")")
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: config.presentationURL)
-                // Persist before the non-idempotent operation, including uncertain failures.
+                // Validate and prepare a dynamic click before marking the action uncertain.
+                var clickEvents: (CGEvent, CGEvent)?
+                if action == nil { clickEvents = try menuClickEvents(item) }
                 backgroundUncertain = true
                 UserDefaults.standard.set(true, forKey: "backgroundUncertain")
                 operation = "背景設定メニューを実行"
-                let result = AXUIElementPerformAction(item, action as CFString)
-                guard result == .success else {
-                    throw AutomationFailure(message: "背景設定メニューの実行結果が不明です（AXエラー \(result.rawValue)）。再実行せず、スライドを手動確認してください。")
+                if let action {
+                    let result = AXUIElementPerformAction(item, action as CFString)
+                    guard result == .success else {
+                        throw AutomationFailure(message: "背景設定メニューの実行結果が不明です（AXエラー \(result.rawValue)）。再実行せず、スライドを手動確認してください。")
+                    }
+                    capture.record("\(action)要求が受理されました。背景化の成功はまだ未確認です。")
+                } else if let (down, up) = clickEvents {
+                    down.post(tap: .cghidEventTap)
+                    up.post(tap: .cghidEventTap)
+                    capture.record("AXで取得・ヒットテストしたメニュー項目をクリックしました。背景化の成功はまだ未確認です。")
                 }
-                capture.record("\(action)要求が受理されました。背景化の成功はまだ未確認です。")
                 try await wait(0.5)
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 let remaining = try await backgroundMenuItems(application)
