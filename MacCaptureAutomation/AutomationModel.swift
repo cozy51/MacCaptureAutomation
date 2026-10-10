@@ -7,7 +7,7 @@ struct AutomationSettings: Codable {
     var presentationURL = ""
     var switchDelay = 1.0
     var pasteDelay = 1.5
-    var keyCode = 124
+    var keyCode = 125
     var command = false
     var option = false
     var shift = false
@@ -36,6 +36,14 @@ final class AutomationModel: ObservableObject {
     init() {
         if let data = UserDefaults.standard.data(forKey: storageKey),
            let saved = try? JSONDecoder().decode(AutomationSettings.self, from: data) { settings = saved }
+        // Apply the requested down-arrow default once to existing installations.
+        if !UserDefaults.standard.bool(forKey: "downArrowDefault.v1") {
+            settings.keyCode = 125
+            settings.command = false; settings.option = false
+            settings.shift = false; settings.control = false
+            save()
+            UserDefaults.standard.set(true, forKey: "downArrowDefault.v1")
+        }
         pasteUncertain = UserDefaults.standard.bool(forKey: "pasteUncertain")
     }
     func save() {
@@ -139,7 +147,7 @@ final class AutomationModel: ObservableObject {
         if s.control { result.insert(.maskControl) }
         return result
     }
-    func start(capture: CaptureModel, transfer: Bool) {
+    func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false) {
         guard !running, !capture.busy else { return }
         if transfer && pasteUncertain { capture.record("前回の貼り付け結果を手動確認し、確認済みボタンを押してください。"); return }
         let config = settings
@@ -151,14 +159,14 @@ final class AutomationModel: ObservableObject {
         task = Task {
             defer { self.running = false; self.paused = false; self.task = nil }
             do {
-                _ = try application(config.kindleID)
+                _ = try application(chromeKeyTest ? "com.google.Chrome" : config.kindleID)
                 if transfer {
                     _ = try application("com.google.Chrome")
                     guard CGPreflightScreenCaptureAccess(), capture.selected != nil else { throw AutomationFailure(message: "画面収録権限と保存済み範囲が必要です。") }
                     guard presentationID(config.presentationURL) != nil else { throw AutomationFailure(message: "有効なGoogleスライドURLを設定してください。") }
                 }
-                operation = "Kindleへ切り替え"; capture.record(operation)
-                let kindle = try await activate(config.kindleID, delay: config.switchDelay)
+                operation = chromeKeyTest ? "Chromeへ切り替え" : "Kindleへ切り替え"; capture.record(operation)
+                let kindle = try await activate(chromeKeyTest ? "com.google.Chrome" : config.kindleID, delay: config.switchDelay)
                 progress = 0.2
                 if transfer {
                     operation = "キャプチャ"; capture.record(operation)
@@ -187,9 +195,10 @@ final class AutomationModel: ObservableObject {
                     operation = "貼り付け結果の手動確認待ち"
                 } else {
                     try await checkpoint()
-                    operation = "Kindleへ設定したキーを送信"
-                    try sendKey(config.keyCode, flags: flags(config), app: kindle)
-                    capture.record("設定したキーを送信しました。Kindleの結果を確認してください。")
+                    operation = chromeKeyTest ? "Chromeへ下矢印を送信" : "Kindleへ設定したキーを送信"
+                    if chromeKeyTest { try verifySlides(kindle, expectedURL: config.presentationURL) }
+                    try sendKey(chromeKeyTest ? 125 : config.keyCode, flags: chromeKeyTest ? [] : flags(config), app: kindle)
+                    capture.record(chromeKeyTest ? "下矢印を送信しました。スライド送りの結果を確認してください。" : "設定したキーを送信しました。Kindleの結果を確認してください。")
                     operation = "キー送信終了"
                 }
                 progress = 1

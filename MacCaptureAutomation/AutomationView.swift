@@ -37,10 +37,12 @@ struct AutomationView: View {
             Text("経過：\(Int(automation.elapsed)) 秒　エラー：\(automation.errors) 件")
             GroupBox("Kindleへのキー送信テスト") {
                 VStack(alignment: .leading, spacing: 12) {
+                    Text("ページ送りの初期値は下矢印です（Kindle・Chrome共通）。")
                     Text("仮想キーコード（0〜127）")
                     Picker("キー", selection: $automation.settings.keyCode) {
+                        Text("下矢印（ページ送り）").tag(125)
                         Text("右矢印").tag(124); Text("左矢印").tag(123)
-                        Text("上矢印").tag(126); Text("下矢印").tag(125)
+                        Text("上矢印").tag(126)
                         Text("Enter").tag(36); Text("Escape").tag(53); Text("Tab").tag(48)
                     }
                     TextField("キーコード", value: $automation.settings.keyCode, format: .number).frame(width: 100)
@@ -51,6 +53,9 @@ struct AutomationView: View {
                         Toggle("Control", isOn: $automation.settings.control)
                     }
                     Button("Kindleを前面にしてキーを1回送信") { automation.start(capture: capture, transfer: false) }
+                    Button("Chromeを前面にして下矢印を1回送信") { automation.start(capture: capture, transfer: false, chromeKeyTest: true) }
+                    Text("Chromeではスライド一覧にフォーカスを置いてください。編集中の画像やテキストにフォーカスがあると移動操作になる場合があります。")
+                        .foregroundStyle(.secondary)
                 }.padding(8)
             }.disabled(automation.running || capture.busy)
             Text("対象アプリが前面でない場合、権限不足、ダイアログ検出、対象URLを確認できない場合は停止します。ChromeのAXDocumentを取得できない環境では貼り付けできません。")
