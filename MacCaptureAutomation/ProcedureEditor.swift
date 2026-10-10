@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import AppKit
 
 struct ProcedureStep: Identifiable, Codable {
     var id = UUID()
@@ -47,14 +48,60 @@ final class ProcedureStore: ObservableObject {
         } else { procedures = [.initial] }
         selectedID = procedures.first?.id
     }
+    private func valid(_ procedure: Procedure) -> Bool {
+        !procedure.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && procedure.steps.count <= 5000 && procedure.steps.allSatisfy {
+            kinds.contains($0.kind) && $0.delay.isFinite && (0...60).contains($0.delay) && (0...127).contains($0.keyCode) && (1...1000).contains($0.repetitions)
+        }
+    }
     func save() {
-        guard procedures.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.steps.allSatisfy { kinds.contains($0.kind) && $0.delay.isFinite && (0...60).contains($0.delay) && (0...127).contains($0.keyCode) && (1...1000).contains($0.repetitions) } }) else {
+        guard procedures.allSatisfy(valid) else {
             message = "名前、待機0〜60秒、キー0〜127、回数1〜1000を確認してください。"; return
         }
         do {
             UserDefaults.standard.set(try JSONEncoder().encode(procedures), forKey: "procedures.v1")
             message = "手順を保存しました。"
         } catch { message = "保存失敗: \(error.localizedDescription)" }
+    }
+    func exportSelected() {
+        guard let procedure = procedures.first(where: { $0.id == selectedID }), valid(procedure) else {
+            message = "書き出す手順の名前と操作設定を確認してください。"; return
+        }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "MacCaptureAutomation-procedure.json"
+        panel.canCreateDirectories = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try encoder.encode(procedure).write(to: url, options: .atomic)
+                self.message = "手順ファイルを保存しました：\(url.path)"
+            } catch { self.message = "書き出し失敗：\(error.localizedDescription)" }
+        }
+    }
+    func importProcedure() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= 1_048_576 else {
+                    self.message = "手順ファイルは1MB以下を選んでください。"; return
+                }
+                var procedure = try JSONDecoder().decode(Procedure.self, from: Data(contentsOf: url))
+                guard self.valid(procedure) else {
+                    self.message = "手順ファイルの名前、操作、待機時間、キー、回数を確認してください。読み込みませんでした。"; return
+                }
+                procedure.id = UUID()
+                procedure.steps = procedure.steps.map { var step = $0; step.id = UUID(); return step }
+                self.procedures.append(procedure)
+                self.selectedID = procedure.id
+                self.message = "手順を追加しました。内容を確認し、「手順を保存」を押してください。"
+            } catch { self.message = "読み込み失敗：\(error.localizedDescription)" }
+        }
     }
 }
 
@@ -77,6 +124,12 @@ struct ProcedureEditor: View {
                 Button("2ページテストを追加") { let p = Procedure.twoPageTest; store.procedures.append(p); store.selectedID = p.id }
                 Button("手順を保存") { store.save() }.buttonStyle(.borderedProminent)
             }
+            HStack {
+                Button("選択手順をファイルに保存") { store.exportSelected() }.disabled(store.selectedID == nil)
+                Button("手順ファイルを読み込む") { store.importProcedure() }
+            }.disabled(automation.running || capture.busy)
+            Text("ファイルには現在の編集内容を保存します。読み込みは別手順として追加されます。実行用の保存には「手順を保存」を押してください。")
+                .font(.caption).foregroundStyle(.secondary)
             if let index = store.procedures.firstIndex(where: { $0.id == store.selectedID }) {
                 TextField("手順名", text: $store.procedures[index].name).textFieldStyle(.roundedBorder)
                 Button("保存済みの選択手順を実行") {
