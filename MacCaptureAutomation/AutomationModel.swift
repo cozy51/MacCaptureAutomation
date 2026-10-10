@@ -718,13 +718,13 @@ extension AutomationModel {
 
 extension AutomationModel {
     private func slideMenuSnapshot(_ application: AXUIElement) async throws -> (roots: [AXUIElement], diagnostics: [String]) {
-        var queue = [application]
+        var queue = axElements(application, "AXWindows")
+        if queue.isEmpty { queue = [application] }
         var visited: [AXUIElement] = []
         var roots: [AXUIElement] = []
         var diagnostics: [String] = []
-        var index = 0
-        while index < queue.count, visited.count < 2500 {
-            let item = queue[index]; index += 1
+        while !queue.isEmpty, visited.count < 2500 {
+            let item = queue.removeLast()
             if visited.contains(where: { CFEqual($0, item) }) { continue }
             visited.append(item)
             if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
@@ -756,15 +756,15 @@ extension AutomationModel {
             if items.count == 1 { return application }
         }
         let snapshot = try await slideMenuSnapshot(application)
-        capture.record("スライドメニューの候補: \(snapshot.diagnostics.isEmpty ? "なし" : snapshot.diagnostics.joined(separator: " | "))")
+        capture.record("スライドメニュー（Webウィンドウ内）の候補: \(snapshot.diagnostics.isEmpty ? "なし" : snapshot.diagnostics.joined(separator: " | "))")
         guard snapshot.roots.count == 1, let root = snapshot.roots.first else {
             throw AutomationFailure(message: "スライドメニューをキーボードで開けず、AXの表示対象も一意に取得できません（\(snapshot.roots.count)件）。追加のEnter・クリックは送信していません。")
         }
         var actions: CFArray?
         AXUIElementCopyActionNames(root, &actions)
         let names = actions as? [String] ?? []
-        guard let action = ["AXShowMenu", "AXPress"].first(where: { names.contains($0) }) else {
-            throw AutomationFailure(message: "スライドメニューの表示操作が公開されていません。公開操作: \(names.joined(separator: ", "))。クリックはしていません。")
+        guard let action = ["AXPress"].first(where: { names.contains($0) }) else {
+            throw AutomationFailure(message: "スライドメニューの表示操作が公開されていません。公開操作: \(names.joined(separator: ", "))。AXShowMenuはChromeの右クリックメニューを開くため使用しません。")
         }
         try await checkpoint()
         try verifySlides(chrome, expectedURL: expectedURL)
