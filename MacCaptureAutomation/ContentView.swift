@@ -3,6 +3,7 @@ import AppKit
 
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
+    @StateObject private var automation = AutomationModel()
     @State private var page = "ダッシュボード"
     private let pages = ["ダッシュボード", "キャプチャ設定", "自動処理", "操作エディタ", "プリセット", "実行履歴", "環境設定"]
     var body: some View {
@@ -15,8 +16,9 @@ struct ContentView: View {
                     Text(page).font(.largeTitle.bold())
                     if page == "環境設定" { permissions }
                     else if page == "実行履歴" { logView }
-                    else if ["自動処理", "操作エディタ"].contains(page) {
-                        Text("次の開発段階で追加予定です。現在はキャプチャ範囲の保存とテストキャプチャをご利用いただけます。")
+                    else if page == "自動処理" { AutomationView(automation: automation, capture: model) }
+                    else if page == "操作エディタ" {
+                        Text("操作エディタは第4段階で追加予定です。第2段階の単発テストは自動処理画面で実行できます。")
                         Text("Googleスライドの背景設定は、Mac上で単独検証してから自動処理に組み込みます。")
                     } else {
                         captureControls
@@ -61,7 +63,7 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent).disabled(model.selected == nil)
                 if model.busy { ProgressView().controlSize(.small) }
             }
-        }.disabled(model.busy)
+        }.disabled(model.busy || automation.running)
     }
     private func metadata(_ preset: CapturePreset) -> some View {
         let rect = preset.absoluteRect.rect
@@ -97,7 +99,7 @@ struct ContentView: View {
             Button("画面収録の許可を要求") { model.requestScreenPermission() }
             Button("画面収録のシステム設定を開く") { openSettings("Privacy_ScreenCapture") }
             Text("アクセシビリティ: \(model.accessibilityPermission ? "許可済み" : "未許可")")
-            Text("第1段階のキャプチャにはアクセシビリティ権限は不要です。後続の自動操作で使用します。")
+            Text("自動処理のアプリ切り替えとキー送信にはアクセシビリティ権限が必要です。許可後にアプリを再起動してください。")
             Button("アクセシビリティのシステム設定を開く") { openSettings("Privacy_Accessibility") }
             Button("権限状態を更新") { model.refreshPermissions() }
             Text("画面収録の許可変更後にアプリの再起動が必要な場合があります。")

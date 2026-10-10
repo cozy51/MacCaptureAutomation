@@ -1,0 +1,62 @@
+import SwiftUI
+
+struct AutomationView: View {
+    @ObservedObject var automation: AutomationModel
+    @ObservedObject var capture: CaptureModel
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("第2段階：単発の操作テスト").font(.title2.bold())
+            Text("背景設定と繰り返しは未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
+            GroupBox("実行設定") {
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField("Kindleのアプリ識別子", text: $automation.settings.kindleID)
+                    TextField("対象のGoogleスライドURL", text: $automation.settings.presentationURL)
+                    HStack {
+                        Text("アプリ切り替え待機（秒）")
+                        TextField("秒", value: $automation.settings.switchDelay, format: .number).frame(width: 90)
+                        Text("貼り付け後待機（秒）")
+                        TextField("秒", value: $automation.settings.pasteDelay, format: .number).frame(width: 90)
+                    }
+                    Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
+                }.textFieldStyle(.roundedBorder).padding(8)
+            }.disabled(automation.running)
+            HStack {
+                Button("1回だけ実行：撮影→貼り付け") { automation.start(capture: capture, transfer: true) }
+                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || capture.busy)
+                Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
+                Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)
+                Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)
+            }
+            if automation.pasteUncertain {
+                Text("貼り付け済みの可能性があります。結果を確認し、不要な画像があれば手動で削除してください。確認前の再実行はできません。")
+                    .foregroundStyle(.orange)
+                Button("貼り付け結果を確認済み") { automation.acknowledgePaste() }.disabled(automation.running)
+            }
+            ProgressView(value: automation.progress)
+            Text("現在の操作：\(automation.operation)\(automation.paused ? "（一時停止中）" : "")")
+            Text("経過：\(Int(automation.elapsed)) 秒　エラー：\(automation.errors) 件")
+            GroupBox("Kindleへのキー送信テスト") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("仮想キーコード（0〜127）")
+                    Picker("キー", selection: $automation.settings.keyCode) {
+                        Text("右矢印").tag(124); Text("左矢印").tag(123)
+                        Text("上矢印").tag(126); Text("下矢印").tag(125)
+                        Text("Enter").tag(36); Text("Escape").tag(53); Text("Tab").tag(48)
+                    }
+                    TextField("キーコード", value: $automation.settings.keyCode, format: .number).frame(width: 100)
+                    HStack {
+                        Toggle("Command", isOn: $automation.settings.command)
+                        Toggle("Option", isOn: $automation.settings.option)
+                        Toggle("Shift", isOn: $automation.settings.shift)
+                        Toggle("Control", isOn: $automation.settings.control)
+                    }
+                    Button("Kindleを前面にしてキーを1回送信") { automation.start(capture: capture, transfer: false) }
+                }.padding(8)
+            }.disabled(automation.running || capture.busy)
+            Text("対象アプリが前面でない場合、権限不足、ダイアログ検出、対象URLを確認できない場合は停止します。ChromeのAXDocumentを取得できない環境では貼り付けできません。")
+                .foregroundStyle(.secondary)
+            Text(capture.message).textSelection(.enabled)
+        }
+        .onDisappear { automation.save() }
+    }
+}
