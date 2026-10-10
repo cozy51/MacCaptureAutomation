@@ -506,7 +506,13 @@ extension AutomationModel {
         return false
     }
     private func menuTitleMatches(_ text: String, names: [String]) -> Bool {
-        let title = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var title = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Web submenu labels include a trailing disclosure marker, e.g.
+        // "レイアウトを適用 a ▶". It is presentation metadata, not the item name.
+        if let last = title.last, ["▶", "▸", "►"].contains(String(last)) {
+            title.removeLast()
+            title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         return names.contains { name in
             if title == name || [" (", "（", "\t", " ⌘", " Ctrl", " Command"].contains(where: { title.hasPrefix(name + $0) }) {
                 return true
