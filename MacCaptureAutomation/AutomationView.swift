@@ -45,6 +45,14 @@ struct AutomationView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(!automation.canRunPlanPage || automation.plan.active || capture.busy)
                 Text("背景設定の操作送信済み：\(automation.continuousDispatchedPages)ページ（成功確認前）")
+                if automation.continuousRunning {
+                    ProgressView(value: automation.progress)
+                    Text("現在：\(automation.continuousCurrentPage) / \(automation.continuousTargetPages)ページ\(automation.paused ? "（一時停止中）" : "")　残り：\(max(0, automation.continuousTargetPages - automation.continuousDispatchedPages))ページ")
+                    Text("現在の操作：\(automation.operation)")
+                    if let seconds = automation.estimatedRemainingSeconds {
+                        Text("残り時間の目安：約\(seconds / 60)分\(seconds % 60)秒（一時停止時間を除く）")
+                    } else { Text("残り時間の目安：最初のページを処理後に表示") }
+                }
                 HStack {
                     Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
                     Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)

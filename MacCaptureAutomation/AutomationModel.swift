@@ -118,6 +118,14 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
     @Published var continuousPages = 2
     @Published private(set) var continuousDispatchedPages = 0
+    @Published private(set) var continuousRunning = false
+    @Published private(set) var continuousTargetPages = 0
+    @Published private(set) var continuousCurrentPage = 0
+    @Published private(set) var activeElapsed = 0.0
+    var estimatedRemainingSeconds: Int? {
+        guard continuousRunning, continuousDispatchedPages > 0, progress > 0, progress < 1 else { return nil }
+        return Int(ceil(activeElapsed * (1 - progress) / progress))
+    }
     @Published private(set) var paused = false
     @Published private(set) var operation = "待機中"
     @Published private(set) var elapsed = 0.0
@@ -135,6 +143,8 @@ final class AutomationModel: ObservableObject {
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
+    private var pauseStarted: Date?
+    private var pausedDuration = 0.0
     private var hotkeys: AutomationHotkeys?
     private var lastTargetApplication: NSRunningApplication?
     private var lastTargetWindow: AXUIElement?
@@ -203,17 +213,29 @@ final class AutomationModel: ObservableObject {
         }
         capture.record("背景設定の結果をユーザーが確認しました。自動判定による成功ではありません。")
     }
-    func pause() { guard running else { return }; paused = true }
+    func pause() { guard running, !paused else { return }; pauseStarted = Date(); paused = true }
     func resume() {
         guard running, paused else { return }
+        finishPauseAccounting()
         needsResumeActivation = true
         paused = false
     }
-    func stop() { task?.cancel(); paused = false; needsResumeActivation = false }
+    func stop() { task?.cancel(); finishPauseAccounting(); paused = false; needsResumeActivation = false }
+    private func finishPauseAccounting() {
+        if let pauseStarted { pausedDuration += Date().timeIntervalSince(pauseStarted) }
+        pauseStarted = nil
+    }
+    private func updateElapsed() {
+        elapsed = started.map { Date().timeIntervalSince($0) } ?? 0
+        let currentPause = pauseStarted.map { Date().timeIntervalSince($0) } ?? 0
+        activeElapsed = max(0, elapsed - pausedDuration - currentPause)
+    }
     private func resetExecutionFocus() {
         lastTargetApplication = nil; lastTargetWindow = nil
         needsResumeActivation = false; restoringResumeFocus = false
         resumePresentationURL = settings.presentationURL
+        pauseStarted = nil; pausedDuration = 0; elapsed = 0; activeElapsed = 0
+        continuousRunning = false
     }
     private func focusedWindow(_ app: NSRunningApplication) throws -> AXUIElement {
         let element = AXUIElementCreateApplication(app.processIdentifier)
@@ -227,11 +249,11 @@ final class AutomationModel: ObservableObject {
 
     private func checkpoint() async throws {
         try Task.checkCancellation()
-        elapsed = started.map { Date().timeIntervalSince($0) } ?? 0
+        updateElapsed()
         while paused {
             try await Task.sleep(nanoseconds: 50_000_000)
             try Task.checkCancellation()
-            elapsed = started.map { Date().timeIntervalSince($0) } ?? 0
+            updateElapsed()
         }
         if needsResumeActivation && !restoringResumeFocus {
             needsResumeActivation = false
@@ -676,7 +698,7 @@ extension AutomationModel {
             }
             try await wait(1)
         }
-        progress = max(progress, 0.8)
+        if !continuousRunning { progress = max(progress, 0.8) }
         try verifySlides(chrome, expectedURL: config.presentationURL)
         operation = "背景設定メニューを検索"
         let items = try await backgroundMenuItems(application)
@@ -710,7 +732,7 @@ extension AutomationModel {
         guard remaining.isEmpty else {
             throw AutomationFailure(message: "背景設定後もメニューが残っています。再実行せず、結果を手動確認してください。")
         }
-        progress = 1
+        if !continuousRunning { progress = 1 }
         operation = "背景設定結果の手動確認待ち"
         capture.record("メニューが閉じました。選択枠が消え、画像が実際の背景になったか確認してください。メニュー閉鎖だけでは成功判定しません。")
     }
@@ -1068,9 +1090,14 @@ extension AutomationModel {
         let shortcut = menuShortcut
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { capture.record("切り替え待機は0〜60秒にしてください。"); return }
         resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
-        if continuous { continuousDispatchedPages = 0 }
+        if continuous {
+            continuousRunning = true
+            continuousDispatchedPages = 0
+            continuousCurrentPage = 1
+            continuousTargetPages = steps.filter { $0.kind == "キャプチャ" }.count * repetitions
+        }
         task = Task {
-            defer { self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
+            defer { self.updateElapsed(); self.continuousRunning = false; self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
             do {
                 guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限が必要です。") }
                 var previousCaptureFingerprint: SHA256.Digest?
@@ -1086,6 +1113,7 @@ extension AutomationModel {
                             _ = try await activate(step.applicationID, delay: config.switchDelay)
                         case "待機": break
                         case "キャプチャ":
+                            if continuous { continuousCurrentPage = continuousDispatchedPages + 1 }
                             guard CGPreflightScreenCaptureAccess() else { throw AutomationFailure(message: "画面収録権限が必要です。") }
                             let kindle = try application(config.kindleID)
                             try verifyFrontmost(kindle)
