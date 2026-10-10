@@ -502,6 +502,89 @@ extension AutomationModel {
         }
         return matches
     }
+    private func parentMenu(_ item: AXUIElement) -> AXUIElement? {
+        var current = item
+        for _ in 0..<12 {
+            guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+            current = unsafeBitCast(value, to: AXUIElement.self)
+            if axString(current, "AXRole") == "AXMenu" { return current }
+        }
+        return nil
+    }
+    private func keyboardSelectedMenuItems(_ menu: AXUIElement, application: AXUIElement) -> [AXUIElement] {
+        var candidates = axElements(menu, "AXSelectedChildren")
+        for source in [application, AXUIElementCreateSystemWide()] {
+            if var focused = focusedElement(source) {
+                for _ in 0..<12 {
+                    if axString(focused, "AXRole") == "AXMenuItem" { candidates.append(focused); break }
+                    guard let value = axValue(focused, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { break }
+                    focused = unsafeBitCast(value, to: AXUIElement.self)
+                }
+            }
+        }
+        var pending = axElements(menu, "AXChildren")
+        var visited: [AXUIElement] = []
+        while let element = pending.popLast(), visited.count < 250 {
+            if visited.contains(where: { CFEqual($0, element) }) { continue }
+            visited.append(element)
+            let role = axString(element, "AXRole")
+            if role == "AXMenu" { continue } // Do not confuse a submenu highlight with this menu.
+            if role == "AXMenuItem", (axValue(element, "AXSelected") as? Bool) == true || (axValue(element, "AXFocused") as? Bool) == true {
+                candidates.append(element)
+            }
+            pending.append(contentsOf: axElements(element, "AXChildren"))
+        }
+        var unique: [AXUIElement] = []
+        for candidate in candidates {
+            guard axString(candidate, "AXRole") == "AXMenuItem", let parent = parentMenu(candidate), CFEqual(parent, menu),
+                  !unique.contains(where: { CFEqual($0, candidate) }) else { continue }
+            unique.append(candidate)
+        }
+        return unique
+    }
+    private func executeBackgroundWithKeyboard(capture: CaptureModel, chrome: NSRunningApplication,
+                                               application: AXUIElement, expectedURL: String) async throws {
+        var lastSelection = ""
+        var unreadableSelections = 0
+        for index in 0..<80 {
+            try await checkpoint()
+            try verifySlides(chrome, expectedURL: expectedURL)
+            let liveItems = try await backgroundMenuItems(application)
+            guard liveItems.count == 1, let target = liveItems.first, let menu = parentMenu(target) else {
+                throw AutomationFailure(message: "背景設定メニューが閉じたか、対象を確認できなくなりました。Enterは送信していません。")
+            }
+            let selected = keyboardSelectedMenuItems(menu, application: application)
+            unreadableSelections = selected.isEmpty ? unreadableSelections + 1 : 0
+            if unreadableSelections >= 5 {
+                var attributes: CFArray?
+                AXUIElementCopyAttributeNames(target, &attributes)
+                let names = (attributes as? [String] ?? []).joined(separator: ", ")
+                throw AutomationFailure(message: "Chromeのメニュー選択状態を取得できません。Enterもクリックも送信していません。背景項目の公開属性: \(names)")
+            }
+            let selection = selected.map { axString($0, "AXTitle") }.joined(separator: ", ")
+            if selection != lastSelection {
+                capture.record("背景メニューの選択項目：\(selection.isEmpty ? "取得できません" : selection)")
+                lastSelection = selection
+            }
+            if selected.count == 1, CFEqual(selected[0], target) {
+                // Re-read immediately before Enter. Never execute by an assumed row number.
+                try verifySlides(chrome, expectedURL: expectedURL)
+                let confirmed = keyboardSelectedMenuItems(menu, application: application)
+                guard confirmed.count == 1, CFEqual(confirmed[0], target), (axValue(target, "AXEnabled") as? Bool) == true else {
+                    throw AutomationFailure(message: "背景設定項目の選択が変わりました。Enterは送信していません。")
+                }
+                backgroundUncertain = true
+                UserDefaults.standard.set(true, forKey: "backgroundUncertain")
+                try sendKey(36, flags: [], app: chrome)
+                capture.record("背景設定項目の選択を確認し、Enterを送信しました。マウスクリックは使用していません。")
+                return
+            }
+            if index == 79 { break }
+            try sendKey(125, flags: [], app: chrome)
+            try await wait(0.08)
+        }
+        throw AutomationFailure(message: "方向キーで背景設定項目の選択を確認できません。ChromeがAXSelected・AXFocused等を公開していない可能性があります。Enterもマウスクリックも送信していません。")
+    }
     private func menuClickEvents(_ item: AXUIElement, newSlide: Bool = false, layoutTarget: String? = nil) throws -> (CGEvent, CGEvent) {
         let targetName = layoutTarget ?? (newSlide ? "新しいスライドのボタン" : "背景設定項目")
         let labels = [axString(item, "AXTitle"), axString(item, "AXDescription")] + (layoutTarget == nil ? [] : [axString(item, "AXHelp")])
@@ -601,31 +684,24 @@ extension AutomationModel {
         }
         var actions: CFArray?
         let actionReadResult = AXUIElementCopyActionNames(item, &actions)
-        guard actionReadResult == .success, let names = actions as? [String] else {
-            throw AutomationFailure(message: "背景設定メニューの操作一覧を取得できません（AXエラー \(actionReadResult.rawValue)）。操作は実行していません。")
-        }
+        let names = actionReadResult == .success ? (actions as? [String] ?? []) : []
         // Chrome menu items can expose AXConfirm, AXPick, or AXPress.
         // AXShowMenu and AXCancel must never be treated as selection actions.
         let action = ["AXConfirm", "AXPick", "AXPress"].first(where: { names.contains($0) })
-        capture.record("背景設定メニューの公開操作: \(names.joined(separator: ", "))。使用操作: \(action ?? "AX位置に基づくクリック")")
+        capture.record("背景設定メニューの公開操作: \(names.joined(separator: ", "))。使用操作: \(action ?? "方向キー＋選択確認＋Enter（マウスなし）")")
         try await checkpoint()
         try verifySlides(chrome, expectedURL: config.presentationURL)
-        // Validate and prepare a dynamic click before marking the action uncertain.
-        var clickEvents: (CGEvent, CGEvent)?
-        if action == nil { clickEvents = try menuClickEvents(item) }
-        backgroundUncertain = true
-        UserDefaults.standard.set(true, forKey: "backgroundUncertain")
         operation = "背景設定メニューを実行"
         if let action {
+            backgroundUncertain = true
+            UserDefaults.standard.set(true, forKey: "backgroundUncertain")
             let result = AXUIElementPerformAction(item, action as CFString)
             guard result == .success else {
                 throw AutomationFailure(message: "背景設定メニューの実行結果が不明です（AXエラー \(result.rawValue)）。再実行せず、スライドを手動確認してください。")
             }
             capture.record("\(action)要求が受理されました。背景化の成功はまだ未確認です。")
-        } else if let (down, up) = clickEvents {
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
-            capture.record("AXで取得・ヒットテストしたメニュー項目をクリックしました。背景化の成功はまだ未確認です。")
+        } else {
+            try await executeBackgroundWithKeyboard(capture: capture, chrome: chrome, application: application, expectedURL: config.presentationURL)
         }
         try await wait(0.5)
         try verifySlides(chrome, expectedURL: config.presentationURL)
