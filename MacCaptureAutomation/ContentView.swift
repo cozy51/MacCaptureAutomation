@@ -17,9 +17,7 @@ struct ContentView: View {
                     if page == "環境設定" { permissions }
                     else if page == "実行履歴" { logView }
                     else if page == "自動処理" { AutomationView(automation: automation, capture: model) }
-                    else if page == "操作エディタ" {
-                        Text("操作エディタは第4段階で追加予定です。第2段階の単発テストは自動処理画面で実行できます。")
-                        Text("Googleスライドの背景設定は、Mac上で単独検証してから自動処理に組み込みます。")
+                    else if page == "操作エディタ" { ProcedureEditor()
                     } else {
                         captureControls
                         if let preset = model.selected { metadata(preset) }

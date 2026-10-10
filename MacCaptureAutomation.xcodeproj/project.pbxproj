@@ -1,5 +1,7 @@
 // !$*UTF8*$!
 { archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+000000000000000000000070 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcedureEditor.swift; sourceTree = "<group>"; };
+000000000000000000000071 = {isa = PBXBuildFile; fileRef = 000000000000000000000070; };
 000000000000000000000066 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationView.swift; sourceTree = "<group>"; };
 000000000000000000000067 = {isa = PBXBuildFile; fileRef = 000000000000000000000066; };
 000000000000000000000064 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationModel.swift; sourceTree = "<group>"; };
@@ -14,9 +16,9 @@
 000000000000000000000017 = {isa = PBXBuildFile; fileRef = 000000000000000000000013; };
 000000000000000000000005 = {isa = PBXFileReference; explicitFileType = wrapper.application; path = MacCaptureAutomation.app; sourceTree = BUILT_PRODUCTS_DIR; };
 000000000000000000000002 = {isa = PBXGroup; children = (000000000000000000000003, 000000000000000000000004); sourceTree = "<group>"; };
-000000000000000000000003 = {isa = PBXGroup; children = (000000000000000000000066, 000000000000000000000064, 000000000000000000000010, 000000000000000000000011, 000000000000000000000012, 000000000000000000000013); path = MacCaptureAutomation; sourceTree = "<group>"; };
+000000000000000000000003 = {isa = PBXGroup; children = (000000000000000000000070, 000000000000000000000066, 000000000000000000000064, 000000000000000000000010, 000000000000000000000011, 000000000000000000000012, 000000000000000000000013); path = MacCaptureAutomation; sourceTree = "<group>"; };
 000000000000000000000004 = {isa = PBXGroup; children = (000000000000000000000005); name = Products; sourceTree = "<group>"; };
-000000000000000000000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000067, 000000000000000000000065, 000000000000000000000014, 000000000000000000000015, 000000000000000000000016, 000000000000000000000017); runOnlyForDeploymentPostprocessing = 0; };
+000000000000000000000007 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (000000000000000000000071, 000000000000000000000067, 000000000000000000000065, 000000000000000000000014, 000000000000000000000015, 000000000000000000000016, 000000000000000000000017); runOnlyForDeploymentPostprocessing = 0; };
 000000000000000000000008 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 000000000000000000000009 = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 000000000000000000000006 = {isa = PBXNativeTarget; buildConfigurationList = 00000000000000000000000B; buildPhases = (000000000000000000000007, 000000000000000000000008, 000000000000000000000009); buildRules = (); dependencies = (); name = MacCaptureAutomation; productName = MacCaptureAutomation; productReference = 000000000000000000000005; productType = "com.apple.product-type.application"; };
