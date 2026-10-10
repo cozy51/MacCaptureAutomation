@@ -29,6 +29,7 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var errors = 0
     @Published private(set) var progress = 0.0
     @Published private(set) var pasteUncertain = false
+    @Published private(set) var backgroundUncertain = false
     private var task: Task<Void, Never>?
     private var started: Date?
     private let storageKey = "automationSettings.v1"
@@ -45,6 +46,7 @@ final class AutomationModel: ObservableObject {
             UserDefaults.standard.set(true, forKey: "downArrowDefault.v1")
         }
         pasteUncertain = UserDefaults.standard.bool(forKey: "pasteUncertain")
+        backgroundUncertain = UserDefaults.standard.bool(forKey: "backgroundUncertain")
     }
     func save() {
         if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: storageKey) }
@@ -52,6 +54,12 @@ final class AutomationModel: ObservableObject {
     func acknowledgePaste() {
         pasteUncertain = false
         UserDefaults.standard.set(false, forKey: "pasteUncertain")
+    }
+    func acknowledgeBackground(capture: CaptureModel) {
+        guard !running else { return }
+        backgroundUncertain = false
+        UserDefaults.standard.set(false, forKey: "backgroundUncertain")
+        capture.record("背景設定の結果をユーザーが確認しました。自動判定による成功ではありません。")
     }
     func pause() { guard running else { return }; paused = true }
     func resume() { paused = false }
@@ -182,6 +190,7 @@ final class AutomationModel: ObservableObject {
     }
     func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false) {
         guard !running, !capture.busy else { return }
+        if transfer && backgroundUncertain { capture.record("背景設定の結果を先に確認してください。"); return }
         if transfer && pasteUncertain { capture.record("前回の貼り付け結果を手動確認し、確認済みボタンを押してください。"); return }
         let config = settings
         guard config.switchDelay.isFinite, config.pasteDelay.isFinite,
@@ -239,6 +248,130 @@ final class AutomationModel: ObservableObject {
                 operation = "停止"; capture.record("停止しました。送信済みのキー操作は取り消せません。")
             } catch {
                 errors += 1; operation = "エラーで停止"; capture.record(error.localizedDescription)
+            }
+        }
+    }
+}
+
+
+extension AutomationModel {
+    private func axValue(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+        return value
+    }
+    private func axString(_ element: AXUIElement, _ attribute: String) -> String {
+        axValue(element, attribute) as? String ?? ""
+    }
+    private func axElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        axValue(element, attribute) as? [AXUIElement] ?? []
+    }
+    private func focusedElement(_ app: AXUIElement) -> AXUIElement? {
+        guard let value = axValue(app, "AXFocusedUIElement"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
+    private func selectedImage(_ application: AXUIElement) async throws -> Bool {
+        guard let focused = focusedElement(application) else { return false }
+        var pending = [focused] + axElements(focused, "AXSelectedChildren")
+        var visited: [AXUIElement] = []
+        while let element = pending.popLast(), visited.count < 400 {
+            if visited.contains(where: { CFEqual($0, element) }) { continue }
+            visited.append(element)
+            if visited.count % 20 == 0 { try await checkpoint(); await Task.yield() }
+            let role = axString(element, "AXRole")
+            let selected = (axValue(element, "AXSelected") as? Bool) == true
+            if role == "AXImage", selected || CFEqual(element, focused) { return true }
+            pending.append(contentsOf: axElements(element, "AXSelectedChildren"))
+            pending.append(contentsOf: axElements(element, "AXChildren"))
+        }
+        return false
+    }
+    private func backgroundMenuItems(_ application: AXUIElement) async throws -> [AXUIElement] {
+        var pending = [application]
+        var visited: [AXUIElement] = []
+        var matches: [AXUIElement] = []
+        while let element = pending.popLast() {
+            if visited.contains(where: { CFEqual($0, element) }) { continue }
+            visited.append(element)
+            if visited.count > 2500 { throw AutomationFailure(message: "ChromeのAccessibility探索上限に達しました。メニューを手動で開くテストを試してください。") }
+            if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
+            let title = axString(element, "AXTitle").trimmingCharacters(in: .whitespacesAndNewlines)
+            if axString(element, "AXRole") == "AXMenuItem",
+               ["画像を背景に設定", "Set image as background"].contains(title),
+               (axValue(element, "AXEnabled") as? Bool) == true {
+                matches.append(element)
+            }
+            pending.append(contentsOf: axElements(element, "AXChildren"))
+        }
+        return matches
+    }
+    func testBackground(capture: CaptureModel, manualMenu: Bool = false) {
+        guard !running, !capture.busy else { return }
+        guard !backgroundUncertain else { capture.record("前回の背景設定の結果を確認してから再テストしてください。"); return }
+        let config = settings
+        guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay),
+              presentationID(config.presentationURL) != nil else {
+            capture.record("対象のGoogleスライドURLと0〜60秒の切り替え待機を設定してください。"); return
+        }
+        save(); running = true; paused = false; progress = 0; started = Date()
+        task = Task {
+            defer { self.running = false; self.paused = false; self.task = nil }
+            do {
+                operation = "背景設定テスト：Chromeへ切り替え"; capture.record(operation)
+                let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                let application = AXUIElementCreateApplication(chrome.processIdentifier)
+                AXUIElementSetMessagingTimeout(application, 0.5)
+                if manualMenu {
+                    operation = "5秒以内に選択画像を右クリックしてください"; capture.record(operation)
+                    try await wait(5)
+                } else {
+                    operation = "画像選択状態を確認"
+                    guard try await selectedImage(application) else {
+                        throw AutomationFailure(message: "Accessibility APIで選択画像を確認できません。画像を選択してください。Chromeが選択情報を公開しない場合は『メニューを手動で開いてテスト』を使用してください。")
+                    }
+                    try await checkpoint()
+                    try verifySlides(chrome, expectedURL: config.presentationURL)
+                    // Shift+F10 is the context-menu shortcut. No fixed-coordinate click.
+                    try sendKey(109, flags: [.maskShift], app: chrome)
+                    try await wait(0.5)
+                }
+                progress = 0.4
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                operation = "背景設定メニューを検索"
+                let items = try await backgroundMenuItems(application)
+                guard items.count == 1, let item = items.first else {
+                    throw AutomationFailure(message: "有効な『画像を背景に設定』メニューを一意に取得できません（\(items.count)件）。右クリックメニューが開いているか確認してください。操作は実行していません。")
+                }
+                var actions: CFArray?
+                guard AXUIElementCopyActionNames(item, &actions) == .success,
+                      let names = actions as? [String], names.contains("AXPress") else {
+                    throw AutomationFailure(message: "背景設定メニューのAXPress操作が公開されていません。操作は実行していません。")
+                }
+                try await checkpoint()
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                // Persist before the non-idempotent operation, including uncertain failures.
+                backgroundUncertain = true
+                UserDefaults.standard.set(true, forKey: "backgroundUncertain")
+                operation = "背景設定メニューを実行"
+                let result = AXUIElementPerformAction(item, "AXPress" as CFString)
+                guard result == .success else {
+                    throw AutomationFailure(message: "背景設定メニューの実行結果が不明です（AXエラー \(result.rawValue)）。再実行せず、スライドを手動確認してください。")
+                }
+                capture.record("AXPress要求が受理されました。背景化の成功はまだ未確認です。")
+                try await wait(0.5)
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                let remaining = try await backgroundMenuItems(application)
+                guard remaining.isEmpty else {
+                    throw AutomationFailure(message: "背景設定後もメニューが残っています。再実行せず、結果を手動確認してください。")
+                }
+                progress = 1
+                operation = "背景設定結果の手動確認待ち"
+                capture.record("メニューが閉じました。選択枠が消え、画像が実際の背景になったか確認してください。メニュー閉鎖だけでは成功判定しません。")
+            } catch is CancellationError {
+                operation = "背景設定テスト停止"; capture.record("背景設定テストを停止しました。実行済みの操作は取り消せません。")
+            } catch {
+                errors += 1; operation = "背景設定テスト：エラーで停止"; capture.record(error.localizedDescription)
             }
         }
     }

@@ -5,8 +5,8 @@ struct AutomationView: View {
     @ObservedObject var capture: CaptureModel
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("第2段階：単発の操作テスト").font(.title2.bold())
-            Text("背景設定と繰り返しは未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
+            Text("第3段階：背景設定の単独テスト").font(.title2.bold())
+            Text("背景設定は単独検証中です。繰り返しは未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
             GroupBox("実行設定") {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("Kindleのアプリ識別子", text: $automation.settings.kindleID)
@@ -22,7 +22,7 @@ struct AutomationView: View {
             }.disabled(automation.running)
             HStack {
                 Button("1回だけ実行：撮影→貼り付け") { automation.start(capture: capture, transfer: true) }
-                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || capture.busy)
+                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || capture.busy)
                 Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
                 Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)
                 Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)
@@ -31,6 +31,23 @@ struct AutomationView: View {
                 Text("貼り付け済みの可能性があります。結果を確認し、不要な画像があれば手動で削除してください。確認前の再実行はできません。")
                     .foregroundStyle(.orange)
                 Button("貼り付け結果を確認済み") { automation.acknowledgePaste() }.disabled(automation.running)
+            }
+            GroupBox("背景設定テスト") {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Chromeで画像を1枚選択してから実行します。撮影・貼り付け・ページ送りは行いません。")
+                    Button("背景設定テスト") { automation.testBackground(capture: capture) }
+                        .disabled(automation.running || automation.backgroundUncertain || capture.busy)
+                    Button("メニューを手動で開いてテスト") { automation.testBackground(capture: capture, manualMenu: true) }
+                        .disabled(automation.running || automation.backgroundUncertain || capture.busy)
+                    Text("通常テストで選択画像を取得できない場合は手動メニュー方式を使用します。Chromeに切り替わった後、5秒以内に選択画像を右クリックしてください。")
+                        .foregroundStyle(.secondary)
+                    if automation.backgroundUncertain {
+                        Text("結果を確認してください：選択枠が消え、画像をクリックしても画像オブジェクトとして選択されず、スライド全面の背景になっていますか？結果不明なら再実行しないでください。")
+                            .foregroundStyle(.orange)
+                        Button("背景設定の結果を手動確認済み") { automation.acknowledgeBackground(capture: capture) }
+                            .disabled(automation.running)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
             }
             ProgressView(value: automation.progress)
             Text("現在の操作：\(automation.operation)\(automation.paused ? "（一時停止中）" : "")")
