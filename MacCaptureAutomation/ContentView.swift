@@ -7,6 +7,8 @@ struct ContentView: View {
     @StateObject private var automation = AutomationModel()
     @State private var page = "ダッシュボード"
     @State private var historyExportMessage = ""
+    @State private var kindleRunning = false
+    @State private var chromeRunning = false
     private let pages = ["ダッシュボード", "キャプチャ設定", "自動処理", "操作エディタ", "プリセット", "実行履歴", "環境設定"]
     var body: some View {
         NavigationSplitView {
@@ -16,6 +18,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     Text(page).font(.largeTitle.bold())
+                    if page == "ダッシュボード" { dashboardStatus }
                     if page == "環境設定" { permissions }
                     else if page == "実行履歴" { logView }
                     else if page == "自動処理" { AutomationView(automation: automation, capture: model) }
@@ -26,10 +29,6 @@ struct ContentView: View {
                         preview
                         Text(model.message).foregroundStyle(model.needsAdjustment ? .red : .secondary)
                         if page == "ダッシュボード" {
-                            HStack {
-                                Label(appRunning("com.amazon.Kindle") ? "Kindle 起動中" : "Kindle 未検出", systemImage: "book")
-                                Label(appRunning("com.google.Chrome") ? "Chrome 起動中" : "Chrome 未検出", systemImage: "globe")
-                            }
                             logView
                         }
                     }
@@ -37,13 +36,54 @@ struct ContentView: View {
             }.background(Color.white)
         }
         .onChange(of: model.selectedID) { _, _ in model.preview = nil; model.needsAdjustment = false; model.persist() }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshPermissions() }
+        .onAppear { refreshDashboard() }
+        .onChange(of: automation.settings.kindleID) { _, _ in refreshDashboard() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshDashboard() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in refreshDashboard() }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in refreshDashboard() }
         .alert("ディスプレイ構成の変更", isPresented: $model.needsAdjustment) {
             Button("範囲を再設定") { model.chooseRegion(replacing: true) }
             Button("キャンセル", role: .cancel) { }
         } message: { Text("解像度、表示スケール、または画面配置が変わっています。現在の画面で範囲を選択し直してください。自動調整は行いません。") }
     }
     private func appRunning(_ id: String) -> Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: id).isEmpty }
+    private func refreshDashboard() {
+        model.refreshPermissions()
+        kindleRunning = appRunning(automation.settings.kindleID)
+        chromeRunning = appRunning("com.google.Chrome")
+    }
+    private var dashboardStatus: some View {
+        GroupBox("処理状況と実行準備") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("現在の操作：\(automation.operation)")
+                if automation.running {
+                    ProgressView(value: automation.progress)
+                    HStack {
+                        Button(automation.paused ? "再開" : "一時停止") {
+                            if automation.paused { automation.resume() } else { automation.pause() }
+                        }
+                        Button("停止", role: .destructive) { automation.stop() }
+                    }
+                }
+                if automation.procedureResultPending || automation.pasteUncertain || automation.backgroundUncertain || automation.navigationUncertain {
+                    Text("操作結果の確認が必要です。実行した画面で結果を確認してください。")
+                        .foregroundStyle(.orange)
+                }
+                Label(kindleRunning ? "Kindle 起動中" : "Kindle 未検出", systemImage: "book")
+                Text("検出対象：\(automation.settings.kindleID)").font(.caption).textSelection(.enabled)
+                Label(chromeRunning ? "Chrome 起動中" : "Chrome 未検出", systemImage: "globe")
+                Text("画面収録：\(model.screenPermission ? "許可済み" : "未許可") ／ アクセシビリティ：\(model.accessibilityPermission ? "許可済み" : "未許可")")
+                Text("撮影範囲：\(model.selected?.name ?? "未選択")")
+                Text(automation.settings.presentationURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "対象スライドURL：未設定" : "対象スライドURL：設定済み（実行時に一致を確認）")
+                HStack {
+                    Button("状態を更新") { refreshDashboard() }
+                    Button("自動処理を開く") { page = "自動処理" }
+                    Button("操作エディタを開く") { page = "操作エディタ" }
+                    Button("権限設定を開く") { page = "環境設定" }
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+        }
+    }
     private var captureControls: some View {
         VStack(alignment: .leading, spacing: 12) {
             Picker("保存済み範囲", selection: $model.selectedID) {
