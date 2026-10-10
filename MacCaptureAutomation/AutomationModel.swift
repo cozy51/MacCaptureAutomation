@@ -86,7 +86,19 @@ final class AutomationModel: ObservableObject {
     private func activate(_ id: String, delay: Double) async throws -> NSRunningApplication {
         try await checkpoint()
         let app = try application(id)
-        guard app.activate(options: []) else { throw AutomationFailure(message: "アプリ切り替えに失敗しました。") }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+            // macOS 14 activation is cooperative: yield from the initiating app.
+            NSApp.yieldActivation(to: app)
+            _ = app.activate(options: [])
+            var attempts = 0
+            while NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
+                try await wait(0.05)
+                attempts += 1
+                if app.isTerminated || attempts >= 100 {
+                    throw AutomationFailure(message: "アプリ切り替えを確認できません: \(id)。対象のウィンドウを開き、最小化を解除して再試行してください。")
+                }
+            }
+        }
         try await wait(delay)
         try verifyFrontmost(app)
         return app
