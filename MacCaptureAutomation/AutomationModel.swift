@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ApplicationServices
+import CryptoKit
 
 struct AutomationSettings: Codable {
     var kindleID = "com.amazon.Kindle"
@@ -900,6 +901,7 @@ extension AutomationModel {
             defer { self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
             do {
                 guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限が必要です。") }
+                var previousCaptureFingerprint: SHA256.Digest?
                 for cycle in 0..<repetitions {
                     var image: NSImage?
                     var copiedChangeCount: Int?
@@ -920,6 +922,16 @@ extension AutomationModel {
                             try await checkpoint()
                             try verifyFrontmost(kindle)
                             guard let fresh = capture.preview else { throw AutomationFailure(message: "キャプチャに失敗しました。") }
+                            if continuous {
+                                guard let fingerprint = capture.captureFingerprint else {
+                                    throw AutomationFailure(message: "撮影画像の比較情報を取得できません。貼り付けず停止しました。")
+                                }
+                                guard previousCaptureFingerprint != fingerprint else {
+                                    throw AutomationFailure(message: "撮影画像が前ページと同じです。Kindleのページ送り不発・本の終端・撮影範囲を確認してください。\(continuousDispatchedPages + 1)ページ目は貼り付けていません。新規スライドは追加済みの可能性があります。")
+                                }
+                                previousCaptureFingerprint = fingerprint
+                                if continuousDispatchedPages > 0 { capture.record("前ページとの撮影画像の変化を検出しました。ページ番号の一致は終了後に確認してください。") }
+                            }
                             image = fresh
                         case "クリップボードへコピー":
                             guard let image else { throw AutomationFailure(message: "今回のキャプチャ画像がありません。") }

@@ -35,6 +35,8 @@ struct AutomationView: View {
                 Text("現在のスライドに1ページ目を貼り付け、以降は新規スライドを追加して空白レイアウトにします。最後は追加・ページ送りをせず終了します。")
                 Text("最初は2ページで試してください。背景化とページ移動の成功は自動判定できません。操作中はキーボード・マウスを操作せず、終了後に全ページの対応を確認してください。")
                     .foregroundStyle(.secondary)
+                Text("撮影画像が前ページと完全に同じ場合は、次の貼り付け前に停止します。画像の変化だけでは正しい次ページと確定できません。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Button("撮影→貼り付け→背景設定を連続実行") { automation.startContinuous(capture: capture) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!automation.canRunPlanPage || automation.plan.active || capture.busy)

@@ -1,6 +1,7 @@
 import AppKit
 import ScreenCaptureKit
 import SwiftUI
+import CryptoKit
 
 struct SavedRect: Codable, Equatable {
     var x: Double
@@ -31,6 +32,7 @@ final class CaptureModel: ObservableObject {
     @Published var presets: [CapturePreset] = []
     @Published var selectedID: UUID?
     @Published var preview: NSImage?
+    private(set) var captureFingerprint: SHA256.Digest?
     @Published var message = "キャプチャ範囲を選択してください。"
     @Published var busy = false
     @Published var screenPermission = CGPreflightScreenCaptureAccess()
@@ -107,6 +109,7 @@ final class CaptureModel: ObservableObject {
     }
 
     func capture() async {
+        captureFingerprint = nil
         guard !busy else { return }
         refreshPermissions()
         guard screenPermission else { record("画面収録権限がありません。環境設定で許可してください。"); return }
@@ -139,6 +142,9 @@ final class CaptureModel: ObservableObject {
             config.height = Int((rect.height * preset.scale).rounded())
             config.showsCursor = false
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+            if let pixels = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                captureFingerprint = SHA256.hash(data: pixels)
+            }
             preview = NSImage(cgImage: image, size: rect.size)
             record("キャプチャ成功: \(image.width) × \(image.height) ピクセル")
         } catch { record("キャプチャ失敗: \(error.localizedDescription)") }
