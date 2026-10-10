@@ -16,7 +16,7 @@ private final class AutomationHotkeys {
             guard let event, let context else { return OSStatus(eventNotHandledErr) }
             var identifier = EventHotKeyID()
             let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
-                                          nil, UInt32(MemoryLayout<EventHotKeyID>.size), nil, &identifier)
+                                          nil, MemoryLayout<EventHotKeyID>.size, nil, &identifier)
             guard result == noErr, identifier.signature == OSType(0x4D434148) else { return OSStatus(eventNotHandledErr) }
             let controller = Unmanaged<AutomationHotkeys>.fromOpaque(context).takeUnretainedValue()
             let id = identifier.id
