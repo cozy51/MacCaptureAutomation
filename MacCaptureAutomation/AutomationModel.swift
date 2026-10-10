@@ -54,6 +54,8 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var awaitingProcedureResult = false
     @Published private(set) var procedureStatus = UserDefaults.standard.string(forKey: "procedureResultStage.v1") ?? "手順実行は待機中"
     @Published private(set) var running = false
+    @Published var continuousPages = 2
+    @Published private(set) var continuousDispatchedPages = 0
     @Published private(set) var paused = false
     @Published private(set) var operation = "待機中"
     @Published private(set) var elapsed = 0.0
@@ -821,7 +823,32 @@ extension AutomationModel {
         while procedureResultPending { try await wait(0.05) }
         try await checkpoint()
     }
-    func runProcedure(_ procedure: Procedure, capture: CaptureModel) {
+    func startContinuous(capture: CaptureModel) {
+        guard (1...500).contains(continuousPages), settings.pasteDelay.isFinite,
+              (0...60).contains(settings.pasteDelay), (0...2).contains(menuShortcut) else {
+            capture.record("ページ数1〜500、貼り付け待機0〜60秒、メニュー表示キーを確認してください。"); return
+        }
+        guard capture.selected != nil, CGPreflightScreenCaptureAccess(),
+              presentationID(settings.presentationURL) != nil else {
+            capture.record("撮影範囲・画面収録権限・対象スライドURLを確認してください。"); return
+        }
+        var steps: [ProcedureStep] = []
+        for page in 0..<continuousPages {
+            if page > 0 {
+                steps.append(ProcedureStep(kind: "スライドの追加", delay: 1))
+                steps.append(ProcedureStep(kind: "ページ送り", delay: 1, applicationID: settings.kindleID, keyCode: 125))
+            }
+            steps += [
+                ProcedureStep(kind: "アプリ切り替え", applicationID: settings.kindleID),
+                ProcedureStep(kind: "キャプチャ"),
+                ProcedureStep(kind: "クリップボードへコピー"),
+                ProcedureStep(kind: "貼り付け", delay: max(1, settings.pasteDelay)),
+                ProcedureStep(kind: "画像を背景に設定", delay: 1)
+            ]
+        }
+        runProcedure(Procedure(name: "連続処理（\(continuousPages)ページ）", steps: steps), capture: capture, continuous: true)
+    }
+    func runProcedure(_ procedure: Procedure, capture: CaptureModel, continuous: Bool = false) {
         guard canRunPlanPage, !capture.busy, !plan.active else {
             capture.record("実行中の処理または未確認の操作があります。先に結果を確認してください。"); return
         }
@@ -849,6 +876,7 @@ extension AutomationModel {
         let shortcut = menuShortcut
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { capture.record("切り替え待機は0〜60秒にしてください。"); return }
         save(); running = true; paused = false; progress = 0; started = Date()
+        if continuous { continuousDispatchedPages = 0 }
         task = Task {
             defer { self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
             do {
@@ -893,6 +921,7 @@ extension AutomationModel {
                             try verifySlides(chrome, expectedURL: config.presentationURL)
                             markProcedureMutation()
                             try await performBackground(capture: capture, chrome: chrome, config: config, shortcut: shortcut, manualMenu: false)
+                            if continuous { continuousDispatchedPages += 1 }
                         case "キーボード操作", "ページ送り":
                             let app = try await activate(step.applicationID, delay: config.switchDelay)
                             if step.applicationID == "com.google.Chrome" { try verifySlides(app, expectedURL: config.presentationURL) }
@@ -923,11 +952,13 @@ extension AutomationModel {
                         default: throw AutomationFailure(message: "未対応の操作です: \(step.kind)")
                         }
                         try await wait(step.delay)
-                        try await waitForProcedureConfirmation(capture: capture)
+                        if !continuous { try await waitForProcedureConfirmation(capture: capture) }
                         progress = Double(cycle * steps.count + index + 1) / Double(repetitions * steps.count)
                     }
                 }
-                procedureStatus = "編集手順の全操作が完了しました。"
+                procedureStatus = continuous
+                    ? "連続処理の操作送信が完了しました（\(continuousDispatchedPages)ページ）。背景とページ対応を確認してください。"
+                    : "編集手順の全操作が完了しました。"
                 UserDefaults.standard.set(procedureStatus, forKey: "procedureResultStage.v1")
                 operation = procedureStatus; capture.record(procedureStatus)
             } catch is CancellationError {

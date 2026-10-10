@@ -3,6 +3,33 @@ import SwiftUI
 struct AutomationView: View {
     @ObservedObject var automation: AutomationModel
     @ObservedObject var capture: CaptureModel
+    private var continuousControls: some View {
+        GroupBox("連続処理（結果を最後にまとめて確認）") {
+            VStack(alignment: .leading, spacing: 12) {
+                Stepper("処理ページ数：\(automation.continuousPages)", value: $automation.continuousPages, in: 1...500)
+                    .disabled(automation.running)
+                Text("現在のスライドに1ページ目を貼り付け、以降は新規スライドを追加して空白レイアウトにします。最後は追加・ページ送りをせず終了します。")
+                Text("最初は2ページで試してください。背景化とページ移動の成功は自動判定できません。操作中はキーボード・マウスを操作せず、終了後に全ページの対応を確認してください。")
+                    .foregroundStyle(.secondary)
+                Button("撮影→貼り付け→背景設定を連続実行") { automation.startContinuous(capture: capture) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!automation.canRunPlanPage || automation.plan.active || capture.busy)
+                Text("背景設定の操作送信済み：\(automation.continuousDispatchedPages)ページ（成功確認前）")
+                HStack {
+                    Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
+                    Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)
+                    Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)
+                }
+                if automation.procedureResultPending {
+                    Text("実行・停止後は作成されたスライドとKindleの位置を確認してください。不明な操作を再送しないでください。")
+                        .foregroundStyle(.orange)
+                    Button("処理結果とページ位置を確認済み") { automation.acknowledgeProcedureResult(capture: capture) }
+                        .disabled(automation.running)
+                }
+                Text(automation.procedureStatus).textSelection(.enabled)
+            }.padding(8)
+        }
+    }
     private var planControls: some View {
         GroupBox("指定ページ数の処理（毎ページ確認）") {
             VStack(alignment: .leading, spacing: 12) {
@@ -26,7 +53,7 @@ struct AutomationView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text("確認を挟むページ処理").font(.title2.bold())
-            Text("各ページの背景化とページ送りを確認しながら処理します。無人の連続実行は未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
+            Text("連続処理または毎ページ確認を選べます。編集権限のあるテスト用スライドで、撮影開始ページと貼り付け先を準備してください。")
             GroupBox("実行設定") {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("Kindleのアプリ識別子", text: $automation.settings.kindleID)
@@ -46,6 +73,7 @@ struct AutomationView: View {
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)
             }.disabled(automation.running)
+            continuousControls
             planControls
             Button("1回だけ実行：撮影→貼り付け→背景設定") {
                 automation.start(capture: capture, transfer: true, setBackground: true)
