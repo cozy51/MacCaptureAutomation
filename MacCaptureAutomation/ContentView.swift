@@ -1,10 +1,12 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @ObservedObject var model: CaptureModel
     @StateObject private var automation = AutomationModel()
     @State private var page = "ダッシュボード"
+    @State private var historyExportMessage = ""
     private let pages = ["ダッシュボード", "キャプチャ設定", "自動処理", "操作エディタ", "プリセット", "実行履歴", "環境設定"]
     var body: some View {
         NavigationSplitView {
@@ -91,11 +93,33 @@ struct ContentView: View {
                     board.clearContents()
                     board.setString(model.logs.joined(separator: "\n"), forType: .string)
                 }.disabled(model.logs.isEmpty || automation.running || model.busy)
+                Button("履歴をファイルに保存") { exportHistory() }
+                    .disabled(model.logs.isEmpty || automation.running || model.busy)
+                if !historyExportMessage.isEmpty {
+                    Text(historyExportMessage).font(.caption).textSelection(.enabled)
+                }
                 Text("コピーするとクリップボードの内容が履歴のテキストに置き換わります。実行中はコピーできません。")
                     .font(.caption).foregroundStyle(.secondary)
                 if model.logs.isEmpty { Text("ログはありません").foregroundStyle(.secondary) }
                 ForEach(Array(model.logs.enumerated()), id: \.offset) { _, entry in Text(entry).textSelection(.enabled) }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+        }
+    }
+    private func exportHistory() {
+        let text = model.logs.joined(separator: "\n") + "\n"
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.plainText]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "MacCaptureAutomation-history.txt"
+        panel.title = "実行履歴を保存"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                try text.write(to: url, atomically: true, encoding: .utf8)
+                historyExportMessage = "履歴を保存しました：\(url.path)"
+            } catch {
+                historyExportMessage = "履歴を保存できませんでした：\(error.localizedDescription)"
+            }
         }
     }
     private var permissions: some View {
