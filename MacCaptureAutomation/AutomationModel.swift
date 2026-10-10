@@ -624,6 +624,31 @@ extension AutomationModel {
             guard liveItems.count == 1, let target = liveItems.first else {
                 throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(liveItems.count)件）。メニューが開いているか確認してください。Enterは送信していません。")
             }
+            // A focused layout choice can be reparented from AXTable to the
+            // toolbar popup. Confirm its unique name and live focus before
+            // requiring any parent container; Chrome can expose AX mirrors.
+            func isFocusedTarget(_ element: AXUIElement) -> Bool {
+                axString(element, "AXRole") == "AXMenuItem"
+                    && (axValue(element, "AXEnabled") as? Bool) == true
+                    && [axString(element, "AXTitle"), axString(element, "AXDescription")]
+                        .contains(where: { menuTitleMatches($0, names: names) })
+            }
+            if let focused = focusedElement(application), isFocusedTarget(focused) {
+                try await checkpoint()
+                try verifySlides(chrome, expectedURL: expectedURL)
+                let refreshedTargets = try await namedMenuItems(application, names: names)
+                guard refreshedTargets.count == 1,
+                      let confirmed = focusedElement(application), isFocusedTarget(confirmed) else {
+                    throw AutomationFailure(message: "『\(targetName)』のフォーカスまたは一意性が変わりました。Enterは送信していません。")
+                }
+                if background {
+                    backgroundUncertain = true
+                    UserDefaults.standard.set(true, forKey: "backgroundUncertain")
+                }
+                try sendKey(openSubmenu ? 124 : 36, flags: [], app: chrome)
+                capture.record("『\(targetName)』の一意性と現在のフォーカスを再確認し、\(openSubmenu ? "右矢印" : "Enter")を送信しました。マウスは使用していません。")
+                return
+            }
             guard let menu = parentMenu(target) else {
                 var current = target
                 var roles = [axString(current, "AXRole")]
