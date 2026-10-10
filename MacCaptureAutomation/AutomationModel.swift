@@ -683,34 +683,19 @@ extension AutomationModel {
                           point.x.isFinite, point.y.isFinite else { return nil }
                     return point
                 }
-                func ancestor(_ element: AXUIElement, role: String) -> AXUIElement? {
-                    var current = element
-                    for _ in 0..<12 {
-                        guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
-                        current = unsafeBitCast(value, to: AXUIElement.self)
-                        if axString(current, "AXRole") == role { return current }
-                    }
-                    return nil
-                }
-                guard let currentRow = ancestor(selected[0], role: "AXRow"),
-                      let destinationRow = ancestor(target, role: "AXRow"),
-                      let currentTable = ancestor(selected[0], role: "AXTable"), CFEqual(currentTable, menu) else {
-                    // Focus may initially remain on the parent menu item.
-                    try sendKey(125, flags: [], app: chrome)
-                    try await wait(0.2)
-                    continue
-                }
                 guard let current = position(selected[0]), let destination = position(target) else {
                     throw AutomationFailure(message: "レイアウト一覧の選択位置を取得できません。Enterもクリックも送信していません。")
                 }
-                if CFEqual(currentRow, destinationRow) {
+                // Chrome's focused menu item may be a separate AX mirror with
+                // no AXRow/AXTable parent. Use live item positions for steering.
+                // A small vertical difference can be caused by differing label
+                // heights within the same tile row.
+                if abs(destination.y - current.y) <= 40 {
                     direction = destination.x > current.x ? 124 : 123
                 } else {
-                    guard let rowPosition = position(currentRow), let targetRowPosition = position(destinationRow) else {
-                        throw AutomationFailure(message: "レイアウト一覧の行位置を取得できません。Enterは送信していません。")
-                    }
-                    direction = targetRowPosition.y > rowPosition.y ? 125 : 126
+                    direction = destination.y > current.y ? 125 : 126
                 }
+                capture.record("レイアウト座標：現在 (\(current.x), \(current.y))／空白 (\(destination.x), \(destination.y))")
                 capture.record("レイアウト一覧：『\(selection)』から\(direction == 124 ? "右" : direction == 123 ? "左" : direction == 125 ? "下" : "上")矢印を送信します。")
             }
             try sendKey(direction, flags: [], app: chrome)
