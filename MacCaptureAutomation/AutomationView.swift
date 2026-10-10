@@ -3,10 +3,30 @@ import SwiftUI
 struct AutomationView: View {
     @ObservedObject var automation: AutomationModel
     @ObservedObject var capture: CaptureModel
+    private var planControls: some View {
+        GroupBox("指定ページ数の処理（毎ページ確認）") {
+            VStack(alignment: .leading, spacing: 12) {
+                Stepper("指定ページ数：\(automation.requestedPages)", value: $automation.requestedPages, in: 1...1000)
+                    .disabled(automation.plan.active || automation.running)
+                ProgressView(value: Double(automation.plan.completed), total: Double(automation.plan.target))
+                Text("確認済み：\(automation.plan.completed) / \(automation.plan.target)ページ")
+                HStack {
+                    Button("指定ページ数の処理を開始") { automation.beginPlan(capture: capture) }
+                        .disabled(automation.plan.active || !automation.canRunPlanPage || capture.busy)
+                    Button("続きの1ページを実行") { automation.runPlanPage(capture: capture) }
+                        .disabled(!automation.plan.active || !automation.canRunPlanPage || capture.busy)
+                    Button("指定ページ数の処理を終了", role: .destructive) { automation.endPlan(capture: capture) }
+                        .disabled(!automation.plan.active)
+                }
+                Text("最初は2ページで試してください。背景化を確認→両アプリのページ送り→結果確認→Chromeの編集キャンバスを選択→続きの1ページ、の順です。最後のページではページ送りを要求せず終了します。")
+                    .foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+        }
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            Text("第3段階：背景設定の単独テスト").font(.title2.bold())
-            Text("背景設定は単独検証中です。繰り返しは未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
+            Text("確認を挟むページ処理").font(.title2.bold())
+            Text("各ページの背景化とページ送りを確認しながら処理します。無人の連続実行は未実装です。編集権限のあるテスト用スライドで画像を貼り付けられる編集状態にして実行してください。")
             GroupBox("実行設定") {
                 VStack(alignment: .leading, spacing: 12) {
                     TextField("Kindleのアプリ識別子", text: $automation.settings.kindleID)
@@ -20,16 +40,17 @@ struct AutomationView: View {
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)
             }.disabled(automation.running)
+            planControls
             Button("1回だけ実行：撮影→貼り付け→背景設定") {
                 automation.start(capture: capture, transfer: true, setBackground: true)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
+            .disabled(automation.plan.active || automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
             Text("背景設定後は手動確認待ちで停止します。確認後、下のページ送りボタンで次へ進めます。自動繰り返しは行いません。Chromeの編集キャンバスを選択してから実行してください。")
                 .foregroundStyle(.secondary)
             HStack {
                 Button("1回だけ実行：撮影→貼り付け") { automation.start(capture: capture, transfer: true) }
-                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
+                    .buttonStyle(.borderedProminent).disabled(automation.plan.active || automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
                 Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
                 Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)
                 Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)

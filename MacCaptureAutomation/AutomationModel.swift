@@ -14,6 +14,18 @@ struct AutomationSettings: Codable {
     var control = false
 }
 
+struct ConfirmedPlan: Codable {
+    var target = 10
+    var completed = 0
+    var active = false
+    static func restore() -> ConfirmedPlan {
+        guard let data = UserDefaults.standard.data(forKey: "confirmedPlan.v1"),
+              let value = try? JSONDecoder().decode(ConfirmedPlan.self, from: data),
+              (1...1000).contains(value.target), (0...value.target).contains(value.completed) else { return ConfirmedPlan() }
+        return value
+    }
+}
+
 struct AutomationFailure: LocalizedError {
     let message: String
     var errorDescription: String? { message }
@@ -33,6 +45,9 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var readyForNextPage = UserDefaults.standard.bool(forKey: "readyForNextPage.v1")
     @Published private(set) var navigationUncertain = UserDefaults.standard.bool(forKey: "navigationUncertain.v1")
     @Published private(set) var navigationStage = UserDefaults.standard.string(forKey: "navigationStage.v1") ?? "未実行"
+    @Published private(set) var plan = ConfirmedPlan.restore()
+    @Published var requestedPages = 10
+    private var pendingPlanPage = UserDefaults.standard.bool(forKey: "pendingPlanPage.v1")
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
@@ -59,18 +74,28 @@ final class AutomationModel: ObservableObject {
     }
     func acknowledgePaste() {
         guard !running, !backgroundUncertain else { return }
+        pendingPlanPage = false
+        UserDefaults.standard.set(false, forKey: "pendingPlanPage.v1")
         combinedBackgroundPending = false
         UserDefaults.standard.set(false, forKey: "combinedBackgroundPending.v1")
         pasteUncertain = false
         UserDefaults.standard.set(false, forKey: "pasteUncertain")
     }
     func acknowledgeBackground(capture: CaptureModel) {
-        guard !running else { return }
+        guard !running, backgroundUncertain else { return }
         backgroundUncertain = false
         UserDefaults.standard.set(false, forKey: "backgroundUncertain")
         if combinedBackgroundPending {
-            readyForNextPage = true
-            UserDefaults.standard.set(true, forKey: "readyForNextPage.v1")
+            if pendingPlanPage && plan.active {
+                plan.completed += 1
+                if plan.completed >= plan.target { plan.active = false }
+                persistPlan()
+                capture.record("確認済みページ: \(plan.completed) / \(plan.target)\(plan.active ? "" : "。指定ページ数が完了しました。")")
+            }
+            readyForNextPage = !(pendingPlanPage && plan.completed >= plan.target)
+            UserDefaults.standard.set(readyForNextPage, forKey: "readyForNextPage.v1")
+            pendingPlanPage = false
+            UserDefaults.standard.set(false, forKey: "pendingPlanPage.v1")
             pasteUncertain = false
             combinedBackgroundPending = false
             UserDefaults.standard.set(false, forKey: "pasteUncertain")
@@ -205,8 +230,9 @@ final class AutomationModel: ObservableObject {
         if s.control { result.insert(.maskControl) }
         return result
     }
-    func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false, setBackground: Bool = false) {
+    func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false, setBackground: Bool = false, planRun: Bool = false) {
         guard !running, !capture.busy else { return }
+        if transfer && plan.active && !planRun { capture.record("指定ページ数の処理中です。『続きの1ページを実行』を使用してください。"); return }
         if transfer && (readyForNextPage || navigationUncertain) {
             capture.record("先に次スライド・次ページへの移動と結果確認を完了してください。"); return
         }
@@ -256,6 +282,8 @@ final class AutomationModel: ObservableObject {
                     pasteUncertain = true; UserDefaults.standard.set(true, forKey: "pasteUncertain")
                     combinedBackgroundPending = setBackground
                     UserDefaults.standard.set(setBackground, forKey: "combinedBackgroundPending.v1")
+                    pendingPlanPage = planRun && plan.active && setBackground
+                    UserDefaults.standard.set(pendingPlanPage, forKey: "pendingPlanPage.v1")
                     operation = "貼り付けキー送信"
                     try sendKey(9, flags: [.maskCommand], app: chrome)
                     capture.record("Command + Vを送信しました。貼り付け結果はGoogleスライドで手動確認してください。")
@@ -588,5 +616,34 @@ extension AutomationModel {
                 errors += 1; operation = "ページ送り：エラーで停止"; capture.record(error.localizedDescription)
             }
         }
+    }
+}
+
+
+extension AutomationModel {
+    private func persistPlan() {
+        if let data = try? JSONEncoder().encode(plan) { UserDefaults.standard.set(data, forKey: "confirmedPlan.v1") }
+    }
+    var canRunPlanPage: Bool {
+        !running && !pasteUncertain && !backgroundUncertain && !readyForNextPage && !navigationUncertain
+    }
+    func beginPlan(capture: CaptureModel) {
+        guard !plan.active, canRunPlanPage, !capture.busy, (1...1000).contains(requestedPages) else { return }
+        plan = ConfirmedPlan(target: requestedPages, completed: 0, active: true)
+        persistPlan()
+        capture.record("確認を挟む指定ページ数の処理を開始: \(plan.target)ページ")
+        runPlanPage(capture: capture)
+    }
+    func runPlanPage(capture: CaptureModel) {
+        guard plan.active, plan.completed < plan.target, canRunPlanPage, !capture.busy else { return }
+        capture.record("ページ \(plan.completed + 1) / \(plan.target) を実行します。")
+        start(capture: capture, transfer: true, setBackground: true, planRun: true)
+    }
+    func endPlan(capture: CaptureModel) {
+        guard plan.active else { return }
+        stop()
+        plan.active = false
+        persistPlan()
+        capture.record("指定ページ数の処理を終了しました。未確認の操作は確認待ちのまま保持します。")
     }
 }
