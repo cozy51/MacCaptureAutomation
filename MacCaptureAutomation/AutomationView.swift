@@ -37,6 +37,12 @@ struct AutomationView: View {
                         Text("貼り付け後待機（秒）")
                         TextField("秒", value: $automation.settings.pasteDelay, format: .number).frame(width: 90)
                     }
+                    Picker("次のスライドの準備方法", selection: $automation.slideNavigationMode) {
+                        ForEach(SlideNavigationMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    .onChange(of: automation.slideNavigationMode) { _, _ in automation.save() }
+                    Text("複製は現在の背景画像も引き継ぎます。新規追加の背景はレイアウトに依存します。ショートカットの結果はテスト用スライドで確認してください。")
+                        .foregroundStyle(.secondary)
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)
             }.disabled(automation.running)
@@ -86,9 +92,10 @@ struct AutomationView: View {
             if automation.readyForNextPage || automation.navigationUncertain {
                 GroupBox("確認後のページ送り") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Chromeの左側の現在のスライドサムネイルをクリックしてから実行してください。クリック自体ではページは進みません。このボタンでChrome、Kindleの順に下矢印を1回ずつ送ります。選択情報を取得できない場合、ページ送り結果は手動確認します。")
+                        Text("Chromeの左側の現在のスライドサムネイルをクリックしてから実行してください。クリック自体ではページは進みません。このボタンでChromeに設定した移動・複製・追加を送り、Kindleには下矢印を1回送ります。選択情報を取得できない場合、ページ送り結果は手動確認します。")
                         Button("次スライド・Kindleの次ページへ") { automation.advancePages(capture: capture) }
                             .disabled(automation.running || automation.navigationUncertain)
+                        Text("Chromeの操作：\(automation.slideNavigationMode.title)")
                         Text("実行段階：\(automation.navigationStage)").textSelection(.enabled)
                         Text("両アプリが次のページになったか確認してください。途中失敗の場合は、片方だけ進んでいる可能性があるため手動で位置を合わせてください。")
                             .foregroundStyle(.orange)

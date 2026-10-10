@@ -14,6 +14,22 @@ struct AutomationSettings: Codable {
     var control = false
 }
 
+enum SlideNavigationMode: String, CaseIterable, Identifiable {
+    case existing, duplicate, add
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .existing: return "既存スライドへ移動（↓）"
+        case .duplicate: return "現在のスライドを複製（Command + D）"
+        case .add: return "新規スライドを追加（Command + M）"
+        }
+    }
+    var keyCode: Int {
+        switch self { case .existing: return 125; case .duplicate: return 2; case .add: return 46 }
+    }
+    var flags: CGEventFlags { self == .existing ? [] : [.maskCommand] }
+}
+
 struct ConfirmedPlan: Codable {
     var target = 10
     var completed = 0
@@ -47,6 +63,7 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var navigationStage = UserDefaults.standard.string(forKey: "navigationStage.v1") ?? "未実行"
     @Published private(set) var plan = ConfirmedPlan.restore()
     @Published var requestedPages = 10
+    @Published var slideNavigationMode = SlideNavigationMode(rawValue: UserDefaults.standard.string(forKey: "slideNavigationMode.v1") ?? "existing") ?? .existing
     private var pendingPlanPage = UserDefaults.standard.bool(forKey: "pendingPlanPage.v1")
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
@@ -70,6 +87,7 @@ final class AutomationModel: ObservableObject {
     }
     func save() {
         UserDefaults.standard.set(menuShortcut, forKey: "backgroundMenuShortcut.v1")
+        UserDefaults.standard.set(slideNavigationMode.rawValue, forKey: "slideNavigationMode.v1")
         if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: storageKey) }
     }
     func acknowledgePaste() {
@@ -552,6 +570,7 @@ extension AutomationModel {
         guard !running, !capture.busy, readyForNextPage, !navigationUncertain,
               !pasteUncertain, !backgroundUncertain else { return }
         let config = settings
+        let mode = slideNavigationMode
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay), presentationID(config.presentationURL) != nil else {
             capture.record("対象URLと切り替え待機を確認してください。"); return
         }
@@ -569,14 +588,16 @@ extension AutomationModel {
                 // has keyboard focus. Do not equate that with active text editing.
                 let slideState = try? focusedSlideList(application)
                 if slideState == nil {
-                    capture.record("スライド一覧の選択情報は取得できません。対象URLを確認して下矢印を送信し、結果は手動確認します。")
+                    capture.record("スライド一覧の選択情報は取得できません。対象URLを確認して設定した操作を送信し、結果は手動確認します。")
                 }
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 navigationUncertain = true
                 UserDefaults.standard.set(true, forKey: "navigationUncertain.v1")
-                setNavigationStage("Chromeへ下矢印を送信予定・結果未確認")
-                try sendKey(125, flags: [], app: chrome)
+                setNavigationStage("Chrome操作予定：\(mode.title)・結果未確認")
+                operation = "Chrome：\(mode.title)"
+                capture.record(operation)
+                try sendKey(mode.keyCode, flags: mode.flags, app: chrome)
                 if let (list, previousSlide) = slideState {
                     operation = "Chromeの選択スライド変更を確認"
                     var changed = false
@@ -596,8 +617,8 @@ extension AutomationModel {
                 } else {
                     try await wait(0.5)
                     try verifySlides(chrome, expectedURL: config.presentationURL)
-                    setNavigationStage("Chromeへ下矢印送信済み・結果未確認・Kindle未送信")
-                    capture.record("Chromeへ下矢印を送信しました。ページが進んだことは自動確認できていません。")
+                    setNavigationStage("Chrome操作送信済み：\(mode.title)・結果未確認・Kindle未送信")
+                    capture.record("Chromeへ\(mode.title)のキーを送信しました。スライドの移動・作成は自動確認できていません。")
                 }
                 progress = 0.5
                 operation = "次ページ送り：Kindleへ切り替え"
@@ -606,7 +627,7 @@ extension AutomationModel {
                 setNavigationStage("Kindleへ下矢印を送信予定・結果未確認")
                 try sendKey(125, flags: [], app: kindle)
                 try await wait(0.5)
-                setNavigationStage("両アプリへ下矢印送信済み・手動確認待ち")
+                setNavigationStage("Chrome：\(mode.title)／Kindle：下矢印送信済み・手動確認待ち")
                 operation = "次スライド・次ページの手動確認待ち"
                 progress = 1
                 capture.record("Kindleへ下矢印を送信しました。両アプリが次のページになったことを手動確認してください。自動で再送しません。")
