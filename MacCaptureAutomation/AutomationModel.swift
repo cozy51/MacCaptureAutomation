@@ -544,7 +544,10 @@ extension AutomationModel {
         for _ in 0..<12 {
             guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
             current = unsafeBitCast(value, to: AXUIElement.self)
-            if axString(current, "AXRole") == "AXMenu" { return current }
+            let role = axString(current, "AXRole")
+            // Chrome's Slides menu is exposed as AXMenuItem → AXMenuItem
+            // → AXMenuBar, while its image context menu uses AXMenu.
+            if role == "AXMenu" || role == "AXMenuBar" { return current }
             // Slides exposes its web menus as AXGroup rather than AXMenu.
             // Individual rows are also groups, so require multiple sibling items.
             if axString(current, "AXRole") == "AXGroup" {
@@ -573,7 +576,7 @@ extension AutomationModel {
             if visited.contains(where: { CFEqual($0, element) }) { continue }
             visited.append(element)
             let role = axString(element, "AXRole")
-            if role == "AXMenu" { continue } // Do not confuse a submenu highlight with this menu.
+            if role == "AXMenu" || role == "AXMenuBar" { continue } // Do not confuse a submenu highlight with this menu.
             if role == "AXMenuItem", (axValue(element, "AXSelected") as? Bool) == true || (axValue(element, "AXFocused") as? Bool) == true {
                 candidates.append(element)
             }
