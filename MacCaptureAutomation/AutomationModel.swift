@@ -567,6 +567,14 @@ extension AutomationModel {
         return nil
     }
     private func keyboardSelectedMenuItems(_ menu: AXUIElement, application: AXUIElement) -> [AXUIElement] {
+        // Chrome's live AXFocusedUIElement is authoritative even when the web
+        // popup's AXParent and AXChildren are inconsistent. The caller compares
+        // this exact element with the uniquely resolved target, then rereads it
+        // immediately before sending Enter or Right; no row number is assumed.
+        if let focused = focusedElement(application), axString(focused, "AXRole") == "AXMenuItem",
+           (axValue(focused, "AXEnabled") as? Bool) == true {
+            return [focused]
+        }
         var candidates = axElements(menu, "AXSelectedChildren")
         for source in [application, AXUIElementCreateSystemWide()] {
             if var focused = focusedElement(source) {
