@@ -69,6 +69,10 @@ struct ContentView: View {
                     Text("操作結果の確認が必要です。実行した画面で結果を確認してください。")
                         .foregroundStyle(.orange)
                 }
+                if automation.layoutNeedsReview {
+                    Text("復元したウィンドウ配置と撮影範囲の確認が必要です。自動処理画面で確認してください。")
+                        .foregroundStyle(.orange)
+                }
                 Label(kindleRunning ? "Kindle 起動中" : "Kindle 未検出", systemImage: "book")
                 Text("検出対象：\(automation.settings.kindleID)").font(.caption).textSelection(.enabled)
                 Label(chromeRunning ? "Chrome 起動中" : "Chrome 未検出", systemImage: "globe")

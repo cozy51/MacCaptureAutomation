@@ -47,6 +47,23 @@ struct AutomationFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
+struct LayoutDisplay: Codable, Equatable {
+    var id: UInt32
+    var frame: SavedRect
+    var scale: Double
+}
+struct WindowLayout: Codable {
+    var kindleID: String
+    var presentationURL: String
+    var kindle: SavedRect
+    var chrome: SavedRect
+    var displays: [LayoutDisplay]
+    static func restore() -> WindowLayout? {
+        guard let data = UserDefaults.standard.data(forKey: "windowLayout.v1") else { return nil }
+        return try? JSONDecoder().decode(WindowLayout.self, from: data)
+    }
+}
+
 @MainActor
 final class AutomationModel: ObservableObject {
     @Published var settings = AutomationSettings()
@@ -54,6 +71,8 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var awaitingProcedureResult = false
     @Published private(set) var procedureStatus = UserDefaults.standard.string(forKey: "procedureResultStage.v1") ?? "手順実行は待機中"
     @Published private(set) var running = false
+    @Published private(set) var windowLayout = WindowLayout.restore()
+    @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
     @Published var continuousPages = 2
     @Published private(set) var continuousDispatchedPages = 0
     @Published private(set) var paused = false
@@ -254,7 +273,7 @@ final class AutomationModel: ObservableObject {
         return result
     }
     func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false, setBackground: Bool = false, planRun: Bool = false) {
-        guard !running, !capture.busy, !procedureResultPending else { return }
+        guard !running, !capture.busy, !procedureResultPending, !layoutNeedsReview else { return }
         if transfer && plan.active && !planRun { capture.record("指定ページ数の処理中です。『続きの1ページを実行』を使用してください。"); return }
         if transfer && (readyForNextPage || navigationUncertain) {
             capture.record("先に次スライド・次ページへの移動と結果確認を完了してください。"); return
@@ -775,7 +794,7 @@ extension AutomationModel {
         if let data = try? JSONEncoder().encode(plan) { UserDefaults.standard.set(data, forKey: "confirmedPlan.v1") }
     }
     var canRunPlanPage: Bool {
-        !running && !pasteUncertain && !backgroundUncertain && !readyForNextPage && !navigationUncertain && !procedureResultPending
+        !running && !pasteUncertain && !backgroundUncertain && !readyForNextPage && !navigationUncertain && !procedureResultPending && !layoutNeedsReview
     }
     func beginPlan(capture: CaptureModel) {
         guard !plan.active, canRunPlanPage, !capture.busy, (1...1000).contains(requestedPages) else { return }
@@ -968,6 +987,150 @@ extension AutomationModel {
                 errors += 1
                 procedureStatus = "編集手順はエラーで停止しました。続きは自動再開しません。"
                 operation = procedureStatus; capture.record(error.localizedDescription)
+            }
+        }
+    }
+}
+
+extension AutomationModel {
+    private func layoutDisplays() -> [LayoutDisplay] {
+        NSScreen.screens.compactMap { screen -> LayoutDisplay? in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+            return LayoutDisplay(id: id.uint32Value, frame: SavedRect(screen.frame), scale: screen.backingScaleFactor)
+        }.sorted { $0.id < $1.id }
+    }
+    private func layoutWindow(_ app: NSRunningApplication) throws -> AXUIElement {
+        try verifyFrontmost(app)
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(element, 0.5)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            throw AutomationFailure(message: "配置対象のウィンドウを確認できません。")
+        }
+        let window = unsafeBitCast(value, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(window, 0.5)
+        for attribute in ["AXFullScreen", "AXMinimized"] {
+            var flag: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, attribute as CFString, &flag) == .success, flag as? Bool == true {
+                throw AutomationFailure(message: "フルスクリーン・最小化を解除してから配置を操作してください。")
+            }
+        }
+        return window
+    }
+    private func layoutRect(_ window: AXUIElement) throws -> SavedRect {
+        var positionValue: CFTypeRef?
+        var sizeValue: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionValue) == .success,
+              AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeValue) == .success,
+              let positionValue, let sizeValue,
+              CFGetTypeID(positionValue) == AXValueGetTypeID(), CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
+            throw AutomationFailure(message: "ウィンドウの位置・サイズを取得できません。")
+        }
+        var point = CGPoint.zero; var size = CGSize.zero
+        guard AXValueGetValue(unsafeBitCast(positionValue, to: AXValue.self), .cgPoint, &point),
+              AXValueGetValue(unsafeBitCast(sizeValue, to: AXValue.self), .cgSize, &size) else {
+            throw AutomationFailure(message: "ウィンドウの座標形式を確認できません。")
+        }
+        let rect = SavedRect(CGRect(origin: point, size: size))
+        try validateLayoutRect(rect)
+        return rect
+    }
+    private func validateLayoutRect(_ rect: SavedRect) throws {
+        guard [rect.x, rect.y, rect.width, rect.height].allSatisfy({ $0.isFinite }),
+              rect.width >= 100, rect.height >= 100, let primary = NSScreen.screens.first else {
+            throw AutomationFailure(message: "保存するウィンドウの座標・サイズが不正です。")
+        }
+        let visible = NSScreen.screens.contains { screen in
+            let frame = screen.visibleFrame
+            let axFrame = CGRect(x: frame.minX, y: primary.frame.maxY - frame.maxY, width: frame.width, height: frame.height)
+            let intersection = axFrame.intersection(rect.rect)
+            return !intersection.isNull && intersection.width >= 100 && intersection.height >= 100
+        }
+        guard visible else { throw AutomationFailure(message: "ウィンドウが画面外です。手動で画面内に移動してください。") }
+    }
+    private func layoutSettable(_ window: AXUIElement) throws {
+        for attribute in [kAXPositionAttribute, kAXSizeAttribute] {
+            var settable: DarwinBoolean = false
+            guard AXUIElementIsAttributeSettable(window, attribute as CFString, &settable) == .success, settable.boolValue else {
+                throw AutomationFailure(message: "位置・サイズの変更が許可されていません。配置は変更していません。")
+            }
+        }
+    }
+    private func setLayoutRect(_ rect: SavedRect, window: AXUIElement) throws {
+        var point = rect.rect.origin; var size = rect.rect.size
+        guard let positionValue = AXValueCreate(.cgPoint, &point), let sizeValue = AXValueCreate(.cgSize, &size),
+              AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success,
+              AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success else {
+            throw AutomationFailure(message: "配置の復元が途中で停止しました。両アプリの位置を手動確認してください。")
+        }
+    }
+    func acknowledgeLayout(capture: CaptureModel) {
+        guard !running else { return }
+        layoutNeedsReview = false
+        UserDefaults.standard.set(false, forKey: "layoutNeedsReview.v1")
+        capture.record("ウィンドウ配置と撮影範囲をユーザーが確認しました。")
+    }
+    func manageWindowLayout(capture: CaptureModel, restore: Bool) {
+        guard !running, !capture.busy, !plan.active, !procedureResultPending,
+              !pasteUncertain, !backgroundUncertain, !navigationUncertain else { return }
+        let config = settings
+        let saved = windowLayout
+        guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { return }
+        if restore {
+            guard let saved, saved.kindleID == config.kindleID,
+                  presentationID(saved.presentationURL) == presentationID(config.presentationURL),
+                  saved.displays == layoutDisplays() else {
+                capture.record("保存時と画面構成・対象アプリ・対象スライドが違います。配置を手動調整して保存し直してください。"); return
+            }
+        }
+        save(); running = true; paused = false; started = Date(); progress = 0
+        task = Task {
+            defer { running = false; paused = false; task = nil }
+            do {
+                let displays = layoutDisplays()
+                let kindle = try await activate(config.kindleID, delay: config.switchDelay)
+                let kindleWindow = try layoutWindow(kindle)
+                let kindleRect = try layoutRect(kindleWindow)
+                let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                let chromeWindow = try layoutWindow(chrome)
+                let chromeRect = try layoutRect(chromeWindow)
+                guard displays == layoutDisplays() else { throw AutomationFailure(message: "画面構成が変わったため配置操作を停止しました。") }
+                if restore, let saved {
+                    try validateLayoutRect(saved.kindle); try validateLayoutRect(saved.chrome)
+                    try layoutSettable(kindleWindow); try layoutSettable(chromeWindow)
+                    layoutNeedsReview = true
+                    UserDefaults.standard.set(true, forKey: "layoutNeedsReview.v1")
+                    for (app, window, rect) in [(kindle, kindleWindow, saved.kindle), (chrome, chromeWindow, saved.chrome)] {
+                        _ = try await activate(app.bundleIdentifier ?? "", delay: config.switchDelay)
+                        guard CFEqual(try layoutWindow(app), window), displays == layoutDisplays() else {
+                            throw AutomationFailure(message: "対象ウィンドウまたは画面構成が変わりました。配置を手動確認してください。")
+                        }
+                        if app.processIdentifier == chrome.processIdentifier { try verifySlides(chrome, expectedURL: config.presentationURL) }
+                        try setLayoutRect(rect, window: window)
+                        try await wait(0.3)
+                        let actual = try layoutRect(window)
+                        guard abs(actual.x - rect.x) <= 2, abs(actual.y - rect.y) <= 2,
+                              abs(actual.width - rect.width) <= 2, abs(actual.height - rect.height) <= 2 else {
+                            throw AutomationFailure(message: "アプリ側が保存したサイズ・位置に復元できませんでした。配置を手動確認してください。")
+                        }
+                    }
+                    capture.preview = nil
+                    operation = "配置を復元しました。撮影範囲を確認してください。"
+                } else {
+                    let layout = WindowLayout(kindleID: config.kindleID, presentationURL: config.presentationURL,
+                                              kindle: kindleRect, chrome: chromeRect, displays: displays)
+                    let data = try JSONEncoder().encode(layout)
+                    UserDefaults.standard.set(data, forKey: "windowLayout.v1")
+                    windowLayout = layout
+                    operation = "KindleとChromeの配置を保存しました。"
+                }
+                progress = 1; capture.record(operation)
+            } catch is CancellationError {
+                operation = "配置操作を停止しました。変更済みの位置は手動確認してください。"; capture.record(operation)
+            } catch {
+                errors += 1; operation = "配置操作はエラーで停止しました。"; capture.record(error.localizedDescription)
             }
         }
     }

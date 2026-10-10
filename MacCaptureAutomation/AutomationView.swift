@@ -3,6 +3,30 @@ import SwiftUI
 struct AutomationView: View {
     @ObservedObject var automation: AutomationModel
     @ObservedObject var capture: CaptureModel
+    private var windowLayoutControls: some View {
+        GroupBox("Kindle・Chromeのウィンドウ配置") {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("両アプリを使いたい位置・サイズに手動で並べて保存します。操作時にKindle、Chromeの順で前面へ切り替えます。復元はこのボタンを押したときだけ行います。")
+                    .foregroundStyle(.secondary)
+                if let layout = automation.windowLayout {
+                    Text("保存済み：Kindle \(Int(layout.kindle.width))×\(Int(layout.kindle.height)) ／ Chrome \(Int(layout.chrome.width))×\(Int(layout.chrome.height)) pt")
+                } else { Text("配置は未保存です。") }
+                HStack {
+                    Button("現在の両ウィンドウ配置を保存") { automation.manageWindowLayout(capture: capture, restore: false) }
+                    Button("保存した配置に復元") { automation.manageWindowLayout(capture: capture, restore: true) }
+                        .disabled(automation.windowLayout == nil || automation.layoutNeedsReview)
+                }.disabled(automation.running || capture.busy || automation.plan.active || automation.procedureResultPending || automation.pasteUncertain || automation.backgroundUncertain || automation.navigationUncertain)
+                if automation.layoutNeedsReview {
+                    Text("両ウィンドウと撮影範囲を確認してください。サイズ変更でKindleの改行やページ数が変わる場合があります。必要なら範囲を再選択し、テストキャプチャしてください。")
+                        .foregroundStyle(.orange)
+                    Button("配置と撮影範囲を確認済み") { automation.acknowledgeLayout(capture: capture) }
+                        .disabled(automation.running || capture.busy)
+                }
+                Text("画面構成・表示スケール・対象スライドが保存時と違う場合は復元しません。フルスクリーンを解除して使ってください。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(8)
+        }
+    }
     private var continuousControls: some View {
         GroupBox("連続処理（結果を最後にまとめて確認）") {
             VStack(alignment: .leading, spacing: 12) {
@@ -73,6 +97,7 @@ struct AutomationView: View {
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)
             }.disabled(automation.running)
+            windowLayoutControls
             continuousControls
             planControls
             Button("1回だけ実行：撮影→貼り付け→背景設定") {
