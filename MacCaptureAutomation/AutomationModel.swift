@@ -50,6 +50,9 @@ struct AutomationFailure: LocalizedError {
 @MainActor
 final class AutomationModel: ObservableObject {
     @Published var settings = AutomationSettings()
+    @Published private(set) var procedureResultPending = UserDefaults.standard.bool(forKey: "procedureResultPending.v1")
+    @Published private(set) var awaitingProcedureResult = false
+    @Published private(set) var procedureStatus = UserDefaults.standard.string(forKey: "procedureResultStage.v1") ?? "手順実行は待機中"
     @Published private(set) var running = false
     @Published private(set) var paused = false
     @Published private(set) var operation = "待機中"
@@ -249,7 +252,7 @@ final class AutomationModel: ObservableObject {
         return result
     }
     func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false, setBackground: Bool = false, planRun: Bool = false) {
-        guard !running, !capture.busy else { return }
+        guard !running, !capture.busy, !procedureResultPending else { return }
         if transfer && plan.active && !planRun { capture.record("指定ページ数の処理中です。『続きの1ページを実行』を使用してください。"); return }
         if transfer && (readyForNextPage || navigationUncertain) {
             capture.record("先に次スライド・次ページへの移動と結果確認を完了してください。"); return
@@ -518,7 +521,7 @@ extension AutomationModel {
         capture.record("メニューが閉じました。選択枠が消え、画像が実際の背景になったか確認してください。メニュー閉鎖だけでは成功判定しません。")
     }
     func testBackground(capture: CaptureModel, manualMenu: Bool = false) {
-        guard !running, !capture.busy else { return }
+        guard !running, !capture.busy, !procedureResultPending else { return }
         guard !backgroundUncertain else { capture.record("前回の背景設定の結果を確認してから再テストしてください。"); return }
         let config = settings
         let shortcut = menuShortcut
@@ -770,7 +773,7 @@ extension AutomationModel {
         if let data = try? JSONEncoder().encode(plan) { UserDefaults.standard.set(data, forKey: "confirmedPlan.v1") }
     }
     var canRunPlanPage: Bool {
-        !running && !pasteUncertain && !backgroundUncertain && !readyForNextPage && !navigationUncertain
+        !running && !pasteUncertain && !backgroundUncertain && !readyForNextPage && !navigationUncertain && !procedureResultPending
     }
     func beginPlan(capture: CaptureModel) {
         guard !plan.active, canRunPlanPage, !capture.busy, (1...1000).contains(requestedPages) else { return }
@@ -790,5 +793,151 @@ extension AutomationModel {
         plan.active = false
         persistPlan()
         capture.record("指定ページ数の処理を終了しました。未確認の操作は確認待ちのまま保持します。")
+    }
+}
+
+
+extension AutomationModel {
+    private func markProcedureMutation() {
+        UserDefaults.standard.set(procedureStatus, forKey: "procedureResultStage.v1")
+        procedureResultPending = true
+        UserDefaults.standard.set(true, forKey: "procedureResultPending.v1")
+    }
+    func acknowledgeProcedureResult(capture: CaptureModel) {
+        guard procedureResultPending, !running || awaitingProcedureResult else { return }
+        procedureResultPending = false
+        pasteUncertain = false; backgroundUncertain = false; navigationUncertain = false
+        for key in ["procedureResultPending.v1", "pasteUncertain", "backgroundUncertain", "navigationUncertain.v1"] {
+            UserDefaults.standard.set(false, forKey: key)
+        }
+        capture.record("編集手順の操作結果をユーザーが確認しました。")
+    }
+    private func waitForProcedureConfirmation(capture: CaptureModel) async throws {
+        guard procedureResultPending else { return }
+        awaitingProcedureResult = true
+        defer { awaitingProcedureResult = false }
+        operation = "編集手順：操作結果の手動確認待ち"
+        capture.record("操作結果を確認し、操作エディタの『操作結果を確認して続ける』を押してください。")
+        while procedureResultPending { try await wait(0.05) }
+        try await checkpoint()
+    }
+    func runProcedure(_ procedure: Procedure, capture: CaptureModel) {
+        guard canRunPlanPage, !capture.busy, !plan.active else {
+            capture.record("実行中の処理または未確認の操作があります。先に結果を確認してください。"); return
+        }
+        let enabled = procedure.steps.filter { $0.enabled }
+        let repeatSteps = enabled.filter { $0.kind == "繰り返し" }
+        let steps = enabled.filter { $0.kind != "繰り返し" }
+        let repetitions = repeatSteps.first?.repetitions ?? 1
+        let allowed = Set(["アプリ切り替え", "キーボード操作", "待機", "キャプチャ", "クリップボードへコピー", "貼り付け", "画像を背景に設定", "既存スライドへ移動", "スライドの複製", "スライドの追加", "ページ送り"])
+        guard !steps.isEmpty, repeatSteps.count <= 1, (1...1000).contains(repetitions),
+              steps.count * repetitions <= 5000,
+              enabled.allSatisfy({ $0.delay.isFinite && (0...60).contains($0.delay) && (0...127).contains($0.keyCode) && allowed.contains($0.kind) || ($0.kind == "繰り返し" && (1...1000).contains($0.repetitions)) }) else {
+            capture.record("手順を確認してください。有効操作が必要です。繰り返し指定は1個、合計5000操作までです。"); return
+        }
+        var hasImage = false
+        var hasCopy = false
+        for step in steps {
+            if step.kind == "キャプチャ" { hasImage = true; hasCopy = false }
+            if step.kind == "クリップボードへコピー" {
+                guard hasImage else { capture.record("コピーの前にキャプチャを登録してください。"); return }
+                hasCopy = true
+            }
+            if step.kind == "貼り付け", !hasCopy { capture.record("貼り付け前にキャプチャとコピーを登録してください。"); return }
+        }
+        let config = settings
+        let shortcut = menuShortcut
+        guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { capture.record("切り替え待機は0〜60秒にしてください。"); return }
+        save(); running = true; paused = false; progress = 0; started = Date()
+        task = Task {
+            defer { self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
+            do {
+                guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限が必要です。") }
+                for cycle in 0..<repetitions {
+                    var image: NSImage?
+                    var copiedChangeCount: Int?
+                    for (index, step) in steps.enumerated() {
+                        try await checkpoint()
+                        procedureStatus = "\(procedure.name)：\(cycle + 1)/\(repetitions)回、操作\(index + 1)/\(steps.count)：\(step.kind)"
+                        operation = procedureStatus; capture.record(procedureStatus)
+                        switch step.kind {
+                        case "アプリ切り替え":
+                            _ = try await activate(step.applicationID, delay: config.switchDelay)
+                        case "待機": break
+                        case "キャプチャ":
+                            guard CGPreflightScreenCaptureAccess() else { throw AutomationFailure(message: "画面収録権限が必要です。") }
+                            let kindle = try application(config.kindleID)
+                            try verifyFrontmost(kindle)
+                            capture.preview = nil
+                            await capture.capture()
+                            try await checkpoint()
+                            try verifyFrontmost(kindle)
+                            guard let fresh = capture.preview else { throw AutomationFailure(message: "キャプチャに失敗しました。") }
+                            image = fresh
+                        case "クリップボードへコピー":
+                            guard let image else { throw AutomationFailure(message: "今回のキャプチャ画像がありません。") }
+                            let board = NSPasteboard.general; board.clearContents()
+                            guard board.writeObjects([image]) else { throw AutomationFailure(message: "画像コピーに失敗しました。") }
+                            copiedChangeCount = board.changeCount
+                        case "貼り付け":
+                            let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                            try verifySlides(chrome, expectedURL: config.presentationURL)
+                            guard let copiedChangeCount, NSPasteboard.general.changeCount == copiedChangeCount else {
+                                throw AutomationFailure(message: "クリップボードが変更されています。貼り付けは送信していません。")
+                            }
+                            markProcedureMutation()
+                            pasteUncertain = true; UserDefaults.standard.set(true, forKey: "pasteUncertain")
+                            try sendKey(9, flags: [.maskCommand], app: chrome)
+                        case "画像を背景に設定":
+                            let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                            try verifySlides(chrome, expectedURL: config.presentationURL)
+                            markProcedureMutation()
+                            try await performBackground(capture: capture, chrome: chrome, config: config, shortcut: shortcut, manualMenu: false)
+                        case "キーボード操作", "ページ送り":
+                            let app = try await activate(step.applicationID, delay: config.switchDelay)
+                            if step.applicationID == "com.google.Chrome" { try verifySlides(app, expectedURL: config.presentationURL) }
+                            var modifiers: CGEventFlags = []
+                            if step.command { modifiers.insert(.maskCommand) }
+                            if step.option { modifiers.insert(.maskAlternate) }
+                            if step.shift { modifiers.insert(.maskShift) }
+                            if step.control { modifiers.insert(.maskControl) }
+                            markProcedureMutation()
+                            try sendKey(step.keyCode, flags: modifiers, app: app)
+                        case "既存スライドへ移動", "スライドの複製", "スライドの追加":
+                            let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                            try verifySlides(chrome, expectedURL: config.presentationURL)
+                            if step.kind == "スライドの追加" {
+                                let app = AXUIElementCreateApplication(chrome.processIdentifier)
+                                AXUIElementSetMessagingTimeout(app, 0.5)
+                                let button = try await newSlideButton(app)
+                                let (down, up) = try menuClickEvents(button, newSlide: true)
+                                markProcedureMutation()
+                                down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+                                try await wait(0.5)
+                                try await applyBlankLayout(capture: capture, chrome: chrome, expectedURL: config.presentationURL)
+                            } else {
+                                markProcedureMutation()
+                                try sendKey(step.kind == "スライドの複製" ? 2 : 125,
+                                            flags: step.kind == "スライドの複製" ? [.maskCommand] : [], app: chrome)
+                            }
+                        default: throw AutomationFailure(message: "未対応の操作です: \(step.kind)")
+                        }
+                        try await wait(step.delay)
+                        try await waitForProcedureConfirmation(capture: capture)
+                        progress = Double(cycle * steps.count + index + 1) / Double(repetitions * steps.count)
+                    }
+                }
+                procedureStatus = "編集手順の全操作が完了しました。"
+                UserDefaults.standard.set(procedureStatus, forKey: "procedureResultStage.v1")
+                operation = procedureStatus; capture.record(procedureStatus)
+            } catch is CancellationError {
+                procedureStatus = "編集手順を停止しました。続きは自動再開しません。"
+                operation = procedureStatus; capture.record(procedureStatus)
+            } catch {
+                errors += 1
+                procedureStatus = "編集手順はエラーで停止しました。続きは自動再開しません。"
+                operation = procedureStatus; capture.record(error.localizedDescription)
+            }
+        }
     }
 }

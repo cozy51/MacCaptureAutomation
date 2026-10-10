@@ -52,12 +52,14 @@ final class ProcedureStore: ObservableObject {
 }
 
 struct ProcedureEditor: View {
+    @ObservedObject var automation: AutomationModel
+    @ObservedObject var capture: CaptureModel
     @StateObject private var store = ProcedureStore()
     @State private var dragging: UUID?
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("操作エディタ").font(.largeTitle.bold())
-            Text("手順の編集・保存用です。編集手順の実行はまだ接続していません。現在の自動処理の設定には影響しません。")
+            Text("保存した手順を実行できます。貼り付け・背景設定・キー操作等の後は結果確認待ちで止まります。無人の連続実行ではありません。")
                 .foregroundStyle(.secondary)
             Picker("保存済み手順", selection: $store.selectedID) {
                 ForEach(store.procedures) { Text($0.name).tag(Optional($0.id)) }
@@ -69,6 +71,17 @@ struct ProcedureEditor: View {
             }
             if let index = store.procedures.firstIndex(where: { $0.id == store.selectedID }) {
                 TextField("手順名", text: $store.procedures[index].name).textFieldStyle(.roundedBorder)
+                Button("保存済みの選択手順を実行") {
+                    // Run exactly the stored snapshot, not unsaved edits.
+                    guard let data = UserDefaults.standard.data(forKey: "procedures.v1"),
+                          let saved = try? JSONDecoder().decode([Procedure].self, from: data),
+                          let selected = saved.first(where: { $0.id == store.selectedID }) else {
+                        store.message = "先に手順を保存してください。"; return
+                    }
+                    automation.runProcedure(selected, capture: capture)
+                }.buttonStyle(.borderedProminent)
+                    .disabled(automation.running || !automation.canRunPlanPage || automation.plan.active || capture.busy)
+
                 HStack {
                     Button("操作を追加") { store.procedures[index].steps.append(ProcedureStep()) }
                     Button("手順を複製") {
@@ -122,6 +135,19 @@ struct ProcedureEditor: View {
                     }
                 }
             }
+            HStack {
+                Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
+                Button("再開") { automation.resume() }.disabled(!automation.paused)
+                Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)
+            }
+            if automation.procedureResultPending {
+                Text("貼り付け、背景化、ページ位置など、直前の操作が正しく反映されたか確認してください。失敗・停止後は手動で状態を確定してから解除してください。")
+                    .foregroundStyle(.orange)
+                Button("操作結果を確認して続ける") { automation.acknowledgeProcedureResult(capture: capture) }
+                    .disabled(automation.running && !automation.awaitingProcedureResult)
+            }
+            Text(automation.procedureStatus).textSelection(.enabled)
+            Text(capture.message).textSelection(.enabled)
             Text(store.message).textSelection(.enabled)
         }.padding(28)
     }

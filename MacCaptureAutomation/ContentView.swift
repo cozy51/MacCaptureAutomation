@@ -17,7 +17,7 @@ struct ContentView: View {
                     if page == "環境設定" { permissions }
                     else if page == "実行履歴" { logView }
                     else if page == "自動処理" { AutomationView(automation: automation, capture: model) }
-                    else if page == "操作エディタ" { ProcedureEditor()
+                    else if page == "操作エディタ" { ProcedureEditor(automation: automation, capture: model)
                     } else {
                         captureControls
                         if let preset = model.selected { metadata(preset) }
