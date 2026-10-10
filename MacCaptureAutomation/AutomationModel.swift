@@ -537,28 +537,40 @@ extension AutomationModel {
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 let application = AXUIElementCreateApplication(chrome.processIdentifier)
                 AXUIElementSetMessagingTimeout(application, 0.5)
-                let (list, previousSlide) = try focusedSlideList(application)
+                // Slides can expose a hidden AXTextArea even when the filmstrip
+                // has keyboard focus. Do not equate that with active text editing.
+                let slideState = try? focusedSlideList(application)
+                if slideState == nil {
+                    capture.record("スライド一覧の選択情報は取得できません。対象URLを確認して下矢印を送信し、結果は手動確認します。")
+                }
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 navigationUncertain = true
                 UserDefaults.standard.set(true, forKey: "navigationUncertain.v1")
                 setNavigationStage("Chromeへ下矢印を送信予定・結果未確認")
                 try sendKey(125, flags: [], app: chrome)
-                operation = "Chromeの選択スライド変更を確認"
-                var changed = false
-                for _ in 0..<30 {
-                    try await wait(0.1)
-                    try verifySlides(chrome, expectedURL: config.presentationURL)
-                    let selected = axElements(list, "AXSelectedChildren")
-                    if selected.count == 1, let next = selected.first, !CFEqual(previousSlide, next) {
-                        changed = true; break
+                if let (list, previousSlide) = slideState {
+                    operation = "Chromeの選択スライド変更を確認"
+                    var changed = false
+                    for _ in 0..<30 {
+                        try await wait(0.1)
+                        try verifySlides(chrome, expectedURL: config.presentationURL)
+                        let selected = axElements(list, "AXSelectedChildren")
+                        if selected.count == 1, let next = selected.first, !CFEqual(previousSlide, next) {
+                            changed = true; break
+                        }
                     }
+                    guard changed else {
+                        throw AutomationFailure(message: "次スライドへの選択変更を確認できません。Kindleは送っていません。両アプリの位置を手動確認・調整してください。")
+                    }
+                    setNavigationStage("Chromeの選択変更を確認・Kindle未送信")
+                    capture.record("Chromeの選択スライドが変わったことを確認しました。")
+                } else {
+                    try await wait(0.5)
+                    try verifySlides(chrome, expectedURL: config.presentationURL)
+                    setNavigationStage("Chromeへ下矢印送信済み・結果未確認・Kindle未送信")
+                    capture.record("Chromeへ下矢印を送信しました。ページが進んだことは自動確認できていません。")
                 }
-                guard changed else {
-                    throw AutomationFailure(message: "次スライドへの選択変更を確認できません。Kindleは送っていません。両アプリの位置を手動確認・調整してください。")
-                }
-                setNavigationStage("Chromeの選択変更を確認・Kindle未送信")
-                capture.record("Chromeの選択スライドが変わったことを確認しました。")
                 progress = 0.5
                 operation = "次ページ送り：Kindleへ切り替え"
                 let kindle = try await activate(config.kindleID, delay: config.switchDelay)

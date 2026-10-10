@@ -65,7 +65,7 @@ struct AutomationView: View {
             if automation.readyForNextPage || automation.navigationUncertain {
                 GroupBox("確認後のページ送り") {
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Chromeの左側の現在のスライドサムネイルをクリックしてから実行してください。Chrome、Kindleの順に下矢印を1回ずつ送ります。")
+                        Text("Chromeの左側の現在のスライドサムネイルをクリックしてから実行してください。クリック自体ではページは進みません。このボタンでChrome、Kindleの順に下矢印を1回ずつ送ります。選択情報を取得できない場合、ページ送り結果は手動確認します。")
                         Button("次スライド・Kindleの次ページへ") { automation.advancePages(capture: capture) }
                             .disabled(automation.running || automation.navigationUncertain)
                         Text("実行段階：\(automation.navigationStage)").textSelection(.enabled)
