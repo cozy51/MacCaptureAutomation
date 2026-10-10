@@ -106,7 +106,7 @@ final class AutomationModel: ObservableObject {
         if AXUIElementCopyAttributeValue(window, kAXModalAttribute as CFString, &modal) == .success,
            (modal as? Bool) == true { throw AutomationFailure(message: "ダイアログを検出しました。") }
         var sheets: CFTypeRef?
-        if AXUIElementCopyAttributeValue(window, kAXSheetsAttribute as CFString, &sheets) == .success,
+        if AXUIElementCopyAttributeValue(window, "AXSheets" as CFString, &sheets) == .success,
            let array = sheets as? [AXUIElement], !array.isEmpty { throw AutomationFailure(message: "シートを検出しました。") }
     }
     private func presentationID(_ string: String) -> String? {
