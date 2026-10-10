@@ -87,15 +87,36 @@ final class AutomationModel: ObservableObject {
         try await checkpoint()
         let app = try application(id)
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
-            // macOS 14 activation is cooperative: yield from the initiating app.
-            NSApp.yieldActivation(to: app)
-            _ = app.activate(options: [])
+            // This app can be in the background after capturing Kindle. Ask
+            // Launch Services to activate the existing target application.
+            guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else {
+                throw AutomationFailure(message: "アプリの場所を確認できません: \(id)")
+            }
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            configuration.createsNewApplicationInstance = false
+            configuration.addsToRecentItems = false
+            if NSApp.isActive { NSApp.yieldActivation(to: app) }
+            let opened: NSRunningApplication = try await withCheckedThrowingContinuation { continuation in
+                NSWorkspace.shared.openApplication(at: url, configuration: configuration) { application, error in
+                    if let error { continuation.resume(throwing: error) }
+                    else if let application { continuation.resume(returning: application) }
+                    else { continuation.resume(throwing: AutomationFailure(message: "アプリ切り替え要求の結果を取得できません: \(id)")) }
+                }
+            }
+            try await checkpoint()
+            guard opened.processIdentifier == app.processIdentifier else {
+                throw AutomationFailure(message: "対象アプリのプロセスが変わったため停止しました: \(id)")
+            }
             var attempts = 0
             while NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
                 try await wait(0.05)
                 attempts += 1
                 if app.isTerminated || attempts >= 100 {
-                    throw AutomationFailure(message: "アプリ切り替えを確認できません: \(id)。対象のウィンドウを開き、最小化を解除して再試行してください。")
+                    let front = NSWorkspace.shared.frontmostApplication
+                    let frontName = front?.localizedName ?? "不明"
+                    let frontID = front?.bundleIdentifier ?? "不明"
+                    throw AutomationFailure(message: "対象アプリを前面にできません: \(id)。現在の前面アプリ: \(frontName)（\(frontID)）。キーは送信していません。")
                 }
             }
         }
