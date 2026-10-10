@@ -553,7 +553,7 @@ extension AutomationModel {
             let role = axString(current, "AXRole")
             // Chrome's Slides menu is exposed as AXMenuItem → AXMenuItem
             // → AXMenuBar, while its image context menu uses AXMenu.
-            if role == "AXMenu" || role == "AXMenuBar" { return current }
+            if role == "AXMenu" || role == "AXMenuBar" || role == "AXTable" { return current }
             // A web popup can be owned by the top-level AXMenuItem ("スライド")
             // or an AXGroup. Prefer that popup over the entire AXMenuBar.
             // Individual rows are also groups, so require multiple sibling items.
@@ -664,7 +664,29 @@ extension AutomationModel {
                 return
             }
             if index == 79 { break }
-            try sendKey(upward ? 126 : 125, flags: [], app: chrome)
+            var direction: Int = upward ? 126 : 125
+            if axString(menu, "AXRole") == "AXTable", selected.count == 1,
+               let selectedContainer = parentMenu(selected[0]), CFEqual(selectedContainer, menu) {
+                // Layout choices form a grid. Use their AX positions only to
+                // choose an arrow direction; activation still requires exact
+                // focused-element equality with the target before Enter.
+                func position(_ element: AXUIElement) -> CGPoint? {
+                    guard let value = axValue(element, "AXPosition"), CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+                    var point = CGPoint.zero
+                    guard AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cgPoint, &point),
+                          point.x.isFinite, point.y.isFinite else { return nil }
+                    return point
+                }
+                guard let current = position(selected[0]), let destination = position(target) else {
+                    throw AutomationFailure(message: "レイアウト一覧の選択位置を取得できません。Enterもクリックも送信していません。")
+                }
+                if abs(destination.y - current.y) > 5 {
+                    direction = destination.y > current.y ? 125 : 126
+                } else {
+                    direction = destination.x > current.x ? 124 : 123
+                }
+            }
+            try sendKey(direction, flags: [], app: chrome)
             try await wait(0.08)
         }
         throw AutomationFailure(message: "方向キーで『\(targetName)』の選択を確認できません。ChromeがAXSelected・AXFocused等を公開していない可能性があります。Enterもマウスクリックも送信していません。")
