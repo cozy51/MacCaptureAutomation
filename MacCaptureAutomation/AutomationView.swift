@@ -41,7 +41,7 @@ struct AutomationView: View {
                         ForEach(SlideNavigationMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
                     .onChange(of: automation.slideNavigationMode) { _, _ in automation.save() }
-                    Text("複製は現在の背景画像も引き継ぎます。新規追加の背景はレイアウトに依存します。ショートカットの結果はテスト用スライドで確認してください。")
+                    Text("複製は現在の背景画像も引き継ぎます。新規追加は空白レイアウトを選びます。背景色の引き継ぎが必要なら複製を使用してください。ショートカットの結果はテスト用スライドで確認してください。")
                         .foregroundStyle(.secondary)
                     Text("クリップボードはキャプチャ画像に置き換わります。必要な内容は実行前に保存してください。")
                 }.textFieldStyle(.roundedBorder).padding(8)

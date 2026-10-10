@@ -21,7 +21,7 @@ enum SlideNavigationMode: String, CaseIterable, Identifiable {
         switch self {
         case .existing: return "既存スライドへ移動（↓）"
         case .duplicate: return "現在のスライドを複製（Command + D）"
-        case .add: return "新規スライドを追加（ツールバー）"
+        case .add: return "新規スライドを追加（空白）"
         }
     }
     var keyCode: Int? {
@@ -382,17 +382,22 @@ extension AutomationModel {
         }
         return matches
     }
-    private func menuClickEvents(_ item: AXUIElement, newSlide: Bool = false) throws -> (CGEvent, CGEvent) {
-        let targetName = newSlide ? "新しいスライドのボタン" : "背景設定項目"
+    private func menuClickEvents(_ item: AXUIElement, newSlide: Bool = false, layoutTarget: String? = nil) throws -> (CGEvent, CGEvent) {
+        let targetName = layoutTarget ?? (newSlide ? "新しいスライドのボタン" : "背景設定項目")
         let labels = [axString(item, "AXTitle"), axString(item, "AXDescription")]
-        let expected = newSlide ? ["新しいスライド", "新規スライド", "New slide"] : ["画像を背景に設定", "Set image as background"]
+        let expected = layoutTarget == "レイアウト" ? ["レイアウト", "Layout"] :
+            layoutTarget == "空白" ? ["空白", "Blank"] :
+            newSlide ? ["新しいスライド", "新規スライド", "New slide"] : ["画像を背景に設定", "Set image as background"]
+        let roles = layoutTarget == "レイアウト" ? ["AXButton", "AXPopUpButton"] :
+            layoutTarget == "空白" ? ["AXMenuItem", "AXButton", "AXRadioButton"] :
+            [newSlide ? "AXButton" : "AXMenuItem"]
         let named = labels.contains { label in
             let text = label.trimmingCharacters(in: .whitespacesAndNewlines)
             return expected.contains { name in
                 text == name || (newSlide && (text.hasPrefix(name + " (") || text.hasPrefix(name + "（")))
             }
         }
-        guard axString(item, "AXRole") == (newSlide ? "AXButton" : "AXMenuItem"), named,
+        guard roles.contains(axString(item, "AXRole")), named,
               (axValue(item, "AXEnabled") as? Bool) == true,
               let positionValue = axValue(item, "AXPosition"),
               let sizeValue = axValue(item, "AXSize"),
@@ -571,6 +576,50 @@ extension AutomationModel {
         }
         return button
     }
+    private func layoutElement(_ application: AXUIElement, target: String) async throws -> AXUIElement {
+        let names = target == "レイアウト" ? ["レイアウト", "Layout"] : ["空白", "Blank"]
+        let roles = target == "レイアウト" ? ["AXButton", "AXPopUpButton"] : ["AXMenuItem", "AXButton", "AXRadioButton"]
+        var queue = [application]
+        var visited: [AXUIElement] = []
+        var index = 0
+        var matches: [AXUIElement] = []
+        while index < queue.count, visited.count < 2500 {
+            let element = queue[index]; index += 1
+            if visited.contains(where: { CFEqual($0, element) }) { continue }
+            visited.append(element)
+            if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
+            let labels = [axString(element, "AXTitle"), axString(element, "AXDescription")]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if roles.contains(axString(element, "AXRole")),
+               (axValue(element, "AXEnabled") as? Bool) == true,
+               labels.contains(where: { names.contains($0) }) { matches.append(element) }
+            queue.append(contentsOf: axElements(element, "AXChildren"))
+        }
+        guard index >= queue.count, matches.count == 1, let item = matches.first else {
+            throw AutomationFailure(message: "『\(target)』を一意に取得できません（\(matches.count)件）。新規スライドは追加済みの可能性があります。Kindleは送っていません。Chromeで手動でレイアウト→空白を選び、位置を確認してください。")
+        }
+        return item
+    }
+    private func applyBlankLayout(capture: CaptureModel, chrome: NSRunningApplication, expectedURL: String) async throws {
+        let application = AXUIElementCreateApplication(chrome.processIdentifier)
+        AXUIElementSetMessagingTimeout(application, 0.5)
+        for target in ["レイアウト", "空白"] {
+            try await checkpoint()
+            try verifySlides(chrome, expectedURL: expectedURL)
+            operation = "新規スライド：\(target)を選択"
+            let item = try await layoutElement(application, target: target)
+            try await checkpoint()
+            try verifySlides(chrome, expectedURL: expectedURL)
+            // Use the dynamic, hit-tested click already validated for Chrome.
+            let (down, up) = try menuClickEvents(item, layoutTarget: target)
+            setNavigationStage("新規スライド追加済み・\(target)操作予定・Kindle未送信")
+            down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+            capture.record("AXで検証した『\(target)』をクリックしました。")
+            try await wait(0.5)
+        }
+        setNavigationStage("空白レイアウトの設定要求済み・結果未確認・Kindle未送信")
+        capture.record("タイトル入力欄がない空白レイアウトになったか手動確認してください。")
+    }
     private func focusedSlideList(_ application: AXUIElement) throws -> (AXUIElement, AXUIElement) {
         guard var current = focusedElement(application) else {
             throw AutomationFailure(message: "Chromeのフォーカスを取得できません。左側のスライド一覧をクリックしてください。")
@@ -684,6 +733,9 @@ extension AutomationModel {
                     try verifySlides(chrome, expectedURL: config.presentationURL)
                     setNavigationStage("Chrome操作送信済み：\(mode.title)・結果未確認・Kindle未送信")
                     capture.record("Chromeへ\(mode.title)の操作を送信しました。スライドの移動・作成は自動確認できていません。")
+                }
+                if mode == .add {
+                    try await applyBlankLayout(capture: capture, chrome: chrome, expectedURL: config.presentationURL)
                 }
                 progress = 0.5
                 operation = "次ページ送り：Kindleへ切り替え"
