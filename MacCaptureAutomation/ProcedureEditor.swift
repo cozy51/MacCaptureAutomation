@@ -25,6 +25,13 @@ struct Procedure: Identifiable, Codable {
             ProcedureStep(kind: "アプリ切り替え", applicationID: "com.google.Chrome"),
             ProcedureStep(kind: "貼り付け"), ProcedureStep(kind: "画像を背景に設定")])
     }
+    static var twoPageTest: Procedure {
+        Procedure(name: "2ページテスト（既存スライドへ移動）", steps:
+            initial.steps + [
+                ProcedureStep(kind: "既存スライドへ移動"),
+                ProcedureStep(kind: "ページ送り", applicationID: "com.amazon.Lassen", keyCode: 125)
+            ] + initial.steps)
+    }
 }
 
 @MainActor
@@ -67,6 +74,7 @@ struct ProcedureEditor: View {
             HStack {
                 Button("新規手順") { let p = Procedure(); store.procedures.append(p); store.selectedID = p.id }
                 Button("初期プリセットを追加") { let p = Procedure.initial; store.procedures.append(p); store.selectedID = p.id }
+                Button("2ページテストを追加") { let p = Procedure.twoPageTest; store.procedures.append(p); store.selectedID = p.id }
                 Button("手順を保存") { store.save() }.buttonStyle(.borderedProminent)
             }
             if let index = store.procedures.firstIndex(where: { $0.id == store.selectedID }) {
@@ -120,7 +128,7 @@ struct ProcedureEditor: View {
                             }
                             if step.kind == "繰り返し" {
                                 Stepper("手順全体の回数：\(step.repetitions)", value: $step.repetitions, in: 1...1000)
-                                Text("実行方式は未接続です。入れ子の繰り返しは対象外です。").foregroundStyle(.secondary)
+                                Text("全操作を指定回数実行します。最後の回も登録されたページ送りを行います。入れ子は対象外です。").foregroundStyle(.secondary)
                             }
                         }.padding(6).textFieldStyle(.roundedBorder)
                     }
