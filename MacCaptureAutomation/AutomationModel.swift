@@ -21,11 +21,11 @@ enum SlideNavigationMode: String, CaseIterable, Identifiable {
         switch self {
         case .existing: return "既存スライドへ移動（↓）"
         case .duplicate: return "現在のスライドを複製（Command + D）"
-        case .add: return "新規スライドを追加（Command + M）"
+        case .add: return "新規スライドを追加（ツールバー）"
         }
     }
-    var keyCode: Int {
-        switch self { case .existing: return 125; case .duplicate: return 2; case .add: return 46 }
+    var keyCode: Int? {
+        switch self { case .existing: return 125; case .duplicate: return 2; case .add: return nil }
     }
     var flags: CGEventFlags { self == .existing ? [] : [.maskCommand] }
 }
@@ -532,6 +532,43 @@ extension AutomationModel {
 
 
 extension AutomationModel {
+    private func newSlideButton(_ application: AXUIElement) async throws -> AXUIElement {
+        var queue = [application]
+        var visited: [AXUIElement] = []
+        var index = 0
+        var matches: [AXUIElement] = []
+        while index < queue.count, visited.count < 2500 {
+            let element = queue[index]; index += 1
+            if visited.contains(where: { CFEqual($0, element) }) { continue }
+            visited.append(element)
+            if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
+            if axString(element, "AXRole") == "AXButton",
+               (axValue(element, "AXEnabled") as? Bool) == true {
+                let labels = [axString(element, "AXTitle"), axString(element, "AXDescription")]
+                let expected = ["新しいスライド", "新規スライド", "New slide"]
+                let named = labels.contains { label in
+                    let text = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return expected.contains { name in
+                        text == name || text.hasPrefix(name + " (") || text.hasPrefix(name + "（")
+                    }
+                }
+                if named { matches.append(element) }
+            }
+            queue.append(contentsOf: axElements(element, "AXChildren"))
+        }
+        guard index >= queue.count else {
+            throw AutomationFailure(message: "新しいスライドのボタン探索上限に達しました。追加操作は実行していません。複製モードか手動追加を使用してください。")
+        }
+        guard matches.count == 1, let button = matches.first else {
+            throw AutomationFailure(message: "新しいスライドのボタンを一意に取得できません（\(matches.count)件）。追加操作は実行していません。複製モードか手動追加を使用してください。")
+        }
+        var actions: CFArray?
+        guard AXUIElementCopyActionNames(button, &actions) == .success,
+              let names = actions as? [String], names.contains("AXPress") else {
+            throw AutomationFailure(message: "新しいスライドのボタンにAXPressがありません。追加操作は実行していません。")
+        }
+        return button
+    }
     private func focusedSlideList(_ application: AXUIElement) throws -> (AXUIElement, AXUIElement) {
         guard var current = focusedElement(application) else {
             throw AutomationFailure(message: "Chromeのフォーカスを取得できません。左側のスライド一覧をクリックしてください。")
@@ -590,6 +627,8 @@ extension AutomationModel {
                 if slideState == nil {
                     capture.record("スライド一覧の選択情報は取得できません。対象URLを確認して設定した操作を送信し、結果は手動確認します。")
                 }
+                var addButton: AXUIElement?
+                if mode == .add { addButton = try await newSlideButton(application) }
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 navigationUncertain = true
@@ -597,7 +636,16 @@ extension AutomationModel {
                 setNavigationStage("Chrome操作予定：\(mode.title)・結果未確認")
                 operation = "Chrome：\(mode.title)"
                 capture.record(operation)
-                try sendKey(mode.keyCode, flags: mode.flags, app: chrome)
+                if mode == .add {
+                    guard let addButton else { throw AutomationFailure(message: "新規追加ボタンがありません。") }
+                    let result = AXUIElementPerformAction(addButton, "AXPress" as CFString)
+                    guard result == .success else {
+                        throw AutomationFailure(message: "新規追加の結果が不明です（AXエラー \(result.rawValue)）。再送せず手動確認してください。Kindleは送っていません。")
+                    }
+                    capture.record("新しいスライドのボタンにAXPressを送りました。作成結果は手動確認してください。")
+                } else if let code = mode.keyCode {
+                    try sendKey(code, flags: mode.flags, app: chrome)
+                }
                 if let (list, previousSlide) = slideState {
                     operation = "Chromeの選択スライド変更を確認"
                     var changed = false
@@ -618,7 +666,7 @@ extension AutomationModel {
                     try await wait(0.5)
                     try verifySlides(chrome, expectedURL: config.presentationURL)
                     setNavigationStage("Chrome操作送信済み：\(mode.title)・結果未確認・Kindle未送信")
-                    capture.record("Chromeへ\(mode.title)のキーを送信しました。スライドの移動・作成は自動確認できていません。")
+                    capture.record("Chromeへ\(mode.title)の操作を送信しました。スライドの移動・作成は自動確認できていません。")
                 }
                 progress = 0.5
                 operation = "次ページ送り：Kindleへ切り替え"
