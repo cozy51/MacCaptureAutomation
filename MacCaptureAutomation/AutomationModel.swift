@@ -1057,12 +1057,21 @@ extension AutomationModel {
             }
         }
     }
-    private func setLayoutRect(_ rect: SavedRect, window: AXUIElement) throws {
+    private func setLayoutRect(_ rect: SavedRect, window: AXUIElement) async throws {
         var point = rect.rect.origin; var size = rect.rect.size
-        guard let positionValue = AXValueCreate(.cgPoint, &point), let sizeValue = AXValueCreate(.cgSize, &size),
-              AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue) == .success,
-              AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, positionValue) == .success else {
-            throw AutomationFailure(message: "配置の復元が途中で停止しました。両アプリの位置を手動確認してください。")
+        guard let positionValue = AXValueCreate(.cgPoint, &point), let sizeValue = AXValueCreate(.cgSize, &size) else {
+            throw AutomationFailure(message: "配置の座標を作成できません。")
+        }
+        // Move to the destination before resizing so the current display edge
+        // does not constrain the requested size. Resizing can move a window,
+        // so apply the destination position once more after the size change.
+        for (attribute, value) in [(kAXPositionAttribute, positionValue), (kAXSizeAttribute, sizeValue), (kAXPositionAttribute, positionValue)] {
+            try await checkpoint()
+            let result = AXUIElementSetAttributeValue(window, attribute as CFString, value)
+            guard result == .success else {
+                throw AutomationFailure(message: "配置の復元が途中で停止しました（\(attribute)、AXエラー\(result.rawValue)）。両アプリの位置を手動確認してください。")
+            }
+            try await wait(0.2)
         }
     }
     func acknowledgeLayout(capture: CaptureModel) {
@@ -1108,13 +1117,21 @@ extension AutomationModel {
                             throw AutomationFailure(message: "対象ウィンドウまたは画面構成が変わりました。配置を手動確認してください。")
                         }
                         if app.processIdentifier == chrome.processIdentifier { try verifySlides(chrome, expectedURL: config.presentationURL) }
-                        try setLayoutRect(rect, window: window)
-                        try await wait(0.3)
-                        let actual = try layoutRect(window)
+                        try await setLayoutRect(rect, window: window)
+                        var actual = try layoutRect(window)
+                        for _ in 0..<40 {
+                            if abs(actual.x - rect.x) <= 2, abs(actual.y - rect.y) <= 2,
+                               abs(actual.width - rect.width) <= 2, abs(actual.height - rect.height) <= 2 { break }
+                            try await wait(0.05)
+                            try verifyFrontmost(app)
+                            actual = try layoutRect(window)
+                        }
                         guard abs(actual.x - rect.x) <= 2, abs(actual.y - rect.y) <= 2,
                               abs(actual.width - rect.width) <= 2, abs(actual.height - rect.height) <= 2 else {
-                            throw AutomationFailure(message: "アプリ側が保存したサイズ・位置に復元できませんでした。配置を手動確認してください。")
+                            let name = app.localizedName ?? app.bundleIdentifier ?? "対象アプリ"
+                            throw AutomationFailure(message: "\(name)の配置が一致しません。保存値: X\(rect.x) Y\(rect.y) \(rect.width)×\(rect.height) pt ／ 実際: X\(actual.x) Y\(actual.y) \(actual.width)×\(actual.height) pt。配置を手動確認してください。")
                         }
+                        capture.record("\(app.localizedName ?? "対象アプリ")の配置復元を確認しました。")
                     }
                     capture.preview = nil
                     operation = "配置を復元しました。撮影範囲を確認してください。"
