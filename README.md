@@ -21,12 +21,12 @@ macOS 14.0 以降、Xcode 15 以降。外部パッケージや API キーは不�
 
 1. `MacCaptureAutomation.xcodeproj` を Xcode で開く。
 2. `MacCaptureAutomation` ターゲット、実行先 `My Mac` を選ぶ。
-3. 必要なら Signing & Capabilities で自分の Team を指定する。
+3. Signing & Capabilities で自分の Team を指定し、Signing Certificate が Apple Development になっていることを確認する。
 4. Run（Command + R）で起動する。
 
 App Sandbox は無効です。後続の他アプリへの自動操作を想定した構成です。配布用の署名・公証は未設定です。
 
-## コマンドラインビルドと .app
+## コマンドラインビルドと .app（権限の実機確認には下記の署名付きインストールを使用）
 
 リポジトリのルートで実行します。
 
@@ -72,7 +72,7 @@ xcodebuild -project MacCaptureAutomation.xcodeproj \
 
 Google スライド背景設定、繰り返し、操作エディタ、ウィンドウ位置管理、永続的な実行履歴は未実装です。自動処理画面では第2段階の単発テストを実行できます。
 
-背景設定は Mac 上で Accessibility API によるメニュー取得、画像選択状態、操作後の実際の背景化を単独検証してから実装します。メニューが閉じたことだけを成功判定にせず、画像オブジェクトの全面配置で代用しません。対象タブを確実に確認できない場合や結果が不明な場合には停止する方針です。現在のアプリは Kindle や Chrome の操作を行いません。
+背景設定は Mac 上で Accessibility API によるメニュー取得、画像選択状態、操作後の実際の背景化を単独検証してから実装します。メニューが閉じたことだけを成功判定にせず、画像オブジェクトの全面配置で代用しません。対象タブを確実に確認できない場合や結果が不明な場合には停止する方針です。現在は単発のキー操作と撮影・貼り付けテストに対応しています。
 
 ## この開発環境での検証状況
 
@@ -103,3 +103,38 @@ Kindleのページ送りの初期値は下矢印（仮想キーコード125、�
 ### アプリ切り替えの確認
 
 macOS 14以降の協調的なアプリ切り替えに合わせ、実行アプリから対象アプリへアクティベーションを譲ります。対象が既に前面の場合は切り替え要求を省略します。切り替え要求の戻り値だけで失敗判定せず、最大5秒の待機で前面アプリのPIDを確認します。確認できない場合や待機後に別アプリへ移動した場合はキー送信を停止します。MacでKindle→撮影→Chromeの転送と、対象ウィンドウを閉じた場合の停止を確認してください。この修正の実機確認は未実施です。
+
+## 許可設定を繰り返さないための運用
+
+初期の署名指定が不足していたため、Teamを設定せずビルドした場合、アドホック署名や未署名のアプリになり、更新でmacOSの権限登録と一致しなくなる可能性がありました。プロジェクトはApple Development署名を明示する構成へ変更しました。TeamはユーザーのMacで指定する必要があります。
+
+### 最初の1回
+
+1. Xcode → Settings → Accounts にApple Accountを追加する。
+2. プロジェクト → TARGETS → MacCaptureAutomation → Signing & CapabilitiesでAutomatically manage signingをON、Teamを自分のものに設定する。Bundle Identifierは `com.cozy51.MacCaptureAutomation` のまま使う。
+3. Signing CertificateがApple Developmentになっていることを確認する。証明書がない場合はAccounts → Manage CertificatesでApple Development証明書を作成する。アドホック署名（Sign to Run Locally）はこの運用では使用しない。
+4. Macのターミナルで署名可能な証明書を確認する。
+
+```sh
+security find-identity -v -p codesigning
+```
+
+5. リポジトリのルートで表示された証明書名を指定する（例の名前を自分のものに置き換える）。
+
+```sh
+bash scripts/install-local.sh "Apple Development: 自分の名前 (識別子)"
+```
+
+アプリは `~/Applications/MacCaptureAutomation.app` にインストールされ、起動する。このアプリを画面収録とアクセシビリティへ追加し、許可後にCommand+Qで終了・再起動する。古いビルドの登録が残っている場合は最初の移行時だけ、古いアプリの項目を削除してこのアプリを登録する。毎回のtccutilリセットは行わない。
+
+### 次回以降
+
+アプリを終了して、同じ証明書名で上記スクリプトを実行する。通常の利用はFinderのホーム → Applicationsから起動し、XcodeのDerivedDataにある別のコピーを混在させない。環境設定に実行中のパスとBundle Identifierを表示するので確認できる。
+
+スクリプトは署名を検証し、既存版とのdesignated requirementが異なる場合は更新を停止する。既存版がアドホック署名の場合は、初回移行として既存アプリを別の場所へ保管する必要がある。macOSの権限を勝手に変更したり、検証を無効にしたりはしない。
+
+証明書を利用できない場合はこの署名付き運用を完了できない。エラー文を確認すること。安定した署名・場所でもmacOSの更新やシステム方針によって再承認が必要になる場合があり、永久に不要とは保証できない。
+
+### 確認
+
+初回に両権限を許可してテスト撮影とKindleキー送信を確認する。ソース更新後、同じ証明書で再インストールし、再許可なしで両操作ができるか確認する。この署名・権限保持の検証はMacで行う必要があり、Linux環境では未実施。

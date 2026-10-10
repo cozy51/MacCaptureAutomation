@@ -96,6 +96,10 @@ struct ContentView: View {
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("画面収録: \(model.screenPermission ? "許可済み" : "未許可")")
+            Text("実行中のアプリ：\(Bundle.main.bundleURL.path)").font(.callout).textSelection(.enabled)
+            Text("識別子：\(Bundle.main.bundleIdentifier ?? "不明")").font(.callout).textSelection(.enabled)
+            Text("更新のたびに許可が外れる場合は、同じApple Development署名と同じインストール先を使ってください。READMEの『許可設定を繰り返さないための運用』を参照してください。")
+                .foregroundStyle(.secondary)
             Button("画面収録の許可を要求") { model.requestScreenPermission() }
             Button("画面収録のシステム設定を開く") { openSettings("Privacy_ScreenCapture") }
             Text("アクセシビリティ: \(model.accessibilityPermission ? "許可済み" : "未許可")")
