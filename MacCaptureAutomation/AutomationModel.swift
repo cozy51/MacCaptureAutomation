@@ -544,6 +544,7 @@ extension AutomationModel {
     }
     private func executeBackgroundWithKeyboard(capture: CaptureModel, chrome: NSRunningApplication,
                                                application: AXUIElement, expectedURL: String) async throws {
+        capture.record("背景メニューを上矢印で末尾側から探索します。")
         var lastSelection = ""
         var unreadableSelections = 0
         for index in 0..<80 {
@@ -580,7 +581,7 @@ extension AutomationModel {
                 return
             }
             if index == 79 { break }
-            try sendKey(125, flags: [], app: chrome)
+            try sendKey(126, flags: [], app: chrome)
             try await wait(0.08)
         }
         throw AutomationFailure(message: "方向キーで背景設定項目の選択を確認できません。ChromeがAXSelected・AXFocused等を公開していない可能性があります。Enterもマウスクリックも送信していません。")
