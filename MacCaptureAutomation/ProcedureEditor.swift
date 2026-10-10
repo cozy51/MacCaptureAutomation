@@ -40,11 +40,15 @@ final class ProcedureStore: ObservableObject {
     @Published var procedures: [Procedure] = []
     @Published var selectedID: UUID?
     @Published var message = "編集した手順は保存ボタンで保存します。"
+    @Published private(set) var savedDataUnreadable = false
     let kinds = ["アプリ切り替え", "キーボード操作", "待機", "キャプチャ", "クリップボードへコピー", "貼り付け", "画像を背景に設定", "既存スライドへ移動", "スライドの複製", "スライドの追加", "ページ送り", "繰り返し"]
     init() {
         if let data = UserDefaults.standard.data(forKey: "procedures.v1") {
             do { procedures = try JSONDecoder().decode([Procedure].self, from: data) }
-            catch { message = "保存データを読み込めません。上書きせず、内容を確認してください。" }
+            catch {
+                savedDataUnreadable = true
+                message = "保存データを読み込めません。元データ保護のためアプリ内の保存を停止しています。編集内容はファイルへ保存できます。"
+            }
         } else { procedures = [.initial] }
         selectedID = procedures.first?.id
     }
@@ -54,6 +58,9 @@ final class ProcedureStore: ObservableObject {
         }
     }
     func save() {
+        guard !savedDataUnreadable else {
+            message = "読み込めなかった元データは保持しています。上書きせず、編集内容をファイルへ保存してください。"; return
+        }
         guard procedures.allSatisfy(valid) else {
             message = "名前、待機0〜60秒、キー0〜127、回数1〜1000を確認してください。"; return
         }
@@ -61,6 +68,20 @@ final class ProcedureStore: ObservableObject {
             UserDefaults.standard.set(try JSONEncoder().encode(procedures), forKey: "procedures.v1")
             message = "手順を保存しました。"
         } catch { message = "保存失敗: \(error.localizedDescription)" }
+    }
+    func add(_ source: Procedure) {
+        var procedure = source
+        procedure.id = UUID()
+        procedure.steps = procedure.steps.map { var step = $0; step.id = UUID(); return step }
+        let base = procedure.name
+        var number = 2
+        while procedures.contains(where: { $0.name == procedure.name }) {
+            procedure.name = "\(base) (\(number))"
+            number += 1
+        }
+        procedures.append(procedure)
+        selectedID = procedure.id
+        message = "「\(procedure.name)」を追加しました。内容を確認し、「手順を保存」を押してください。"
     }
     func exportSelected() {
         guard let procedure = procedures.first(where: { $0.id == selectedID }), valid(procedure) else {
@@ -91,15 +112,11 @@ final class ProcedureStore: ObservableObject {
                 guard size <= 1_048_576 else {
                     self.message = "手順ファイルは1MB以下を選んでください。"; return
                 }
-                var procedure = try JSONDecoder().decode(Procedure.self, from: Data(contentsOf: url))
+                let procedure = try JSONDecoder().decode(Procedure.self, from: Data(contentsOf: url))
                 guard self.valid(procedure) else {
                     self.message = "手順ファイルの名前、操作、待機時間、キー、回数を確認してください。読み込みませんでした。"; return
                 }
-                procedure.id = UUID()
-                procedure.steps = procedure.steps.map { var step = $0; step.id = UUID(); return step }
-                self.procedures.append(procedure)
-                self.selectedID = procedure.id
-                self.message = "手順を追加しました。内容を確認し、「手順を保存」を押してください。"
+                self.add(procedure)
             } catch { self.message = "読み込み失敗：\(error.localizedDescription)" }
         }
     }
@@ -119,10 +136,10 @@ struct ProcedureEditor: View {
                 ForEach(store.procedures) { Text($0.name).tag(Optional($0.id)) }
             }
             HStack {
-                Button("新規手順") { let p = Procedure(); store.procedures.append(p); store.selectedID = p.id }
-                Button("初期プリセットを追加") { let p = Procedure.initial; store.procedures.append(p); store.selectedID = p.id }
-                Button("2ページテストを追加") { let p = Procedure.twoPageTest; store.procedures.append(p); store.selectedID = p.id }
-                Button("手順を保存") { store.save() }.buttonStyle(.borderedProminent)
+                Button("新規手順") { store.add(Procedure()) }
+                Button("初期プリセットを追加") { store.add(.initial) }
+                Button("2ページテストを追加") { store.add(.twoPageTest) }
+                Button("手順を保存") { store.save() }.buttonStyle(.borderedProminent).disabled(store.savedDataUnreadable)
             }
             HStack {
                 Button("選択手順をファイルに保存") { store.exportSelected() }.disabled(store.selectedID == nil)
@@ -130,6 +147,7 @@ struct ProcedureEditor: View {
             }.disabled(automation.running || capture.busy)
             Text("ファイルには現在の編集内容を保存します。読み込みは別手順として追加されます。実行用の保存には「手順を保存」を押してください。")
                 .font(.caption).foregroundStyle(.secondary)
+            Text(store.message).textSelection(.enabled)
             if let index = store.procedures.firstIndex(where: { $0.id == store.selectedID }) {
                 TextField("手順名", text: $store.procedures[index].name).textFieldStyle(.roundedBorder)
                 Button("保存済みの選択手順を実行") {
@@ -146,9 +164,8 @@ struct ProcedureEditor: View {
                 HStack {
                     Button("操作を追加") { store.procedures[index].steps.append(ProcedureStep()) }
                     Button("手順を複製") {
-                        var p = store.procedures[index]; p.id = UUID(); p.name += " コピー"
-                        p.steps = p.steps.map { var step = $0; step.id = UUID(); return step }
-                        store.procedures.append(p); store.selectedID = p.id
+                        var p = store.procedures[index]; p.name += " コピー"
+                        store.add(p)
                     }
                     Button("手順を削除", role: .destructive) {
                         store.procedures.remove(at: index); store.selectedID = store.procedures.first?.id
@@ -209,7 +226,6 @@ struct ProcedureEditor: View {
             }
             Text(automation.procedureStatus).textSelection(.enabled)
             Text(capture.message).textSelection(.enabled)
-            Text(store.message).textSelection(.enabled)
         }.padding(28)
     }
     private func move(_ id: UUID, index: Int, delta: Int) {
