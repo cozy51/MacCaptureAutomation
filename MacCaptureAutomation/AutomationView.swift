@@ -24,12 +24,12 @@ struct AutomationView: View {
                 automation.start(capture: capture, transfer: true, setBackground: true)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || capture.busy)
-            Text("背景設定後は手動確認待ちで停止します。ページ送り・繰り返しは行いません。Chromeの編集キャンバスを選択してから実行してください。")
+            .disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
+            Text("背景設定後は手動確認待ちで停止します。確認後、下のページ送りボタンで次へ進めます。自動繰り返しは行いません。Chromeの編集キャンバスを選択してから実行してください。")
                 .foregroundStyle(.secondary)
             HStack {
                 Button("1回だけ実行：撮影→貼り付け") { automation.start(capture: capture, transfer: true) }
-                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || capture.busy)
+                    .buttonStyle(.borderedProminent).disabled(automation.running || automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || capture.busy)
                 Button("一時停止") { automation.pause() }.disabled(!automation.running || automation.paused)
                 Button("再開") { automation.resume() }.disabled(!automation.running || !automation.paused)
                 Button("停止", role: .destructive) { automation.stop() }.disabled(!automation.running)
@@ -61,6 +61,20 @@ struct AutomationView: View {
                             .disabled(automation.running)
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+            }
+            if automation.readyForNextPage || automation.navigationUncertain {
+                GroupBox("確認後のページ送り") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Chromeの左側の現在のスライドサムネイルをクリックしてから実行してください。Chrome、Kindleの順に下矢印を1回ずつ送ります。")
+                        Button("次スライド・Kindleの次ページへ") { automation.advancePages(capture: capture) }
+                            .disabled(automation.running || automation.navigationUncertain)
+                        Text("実行段階：\(automation.navigationStage)").textSelection(.enabled)
+                        Text("両アプリが次のページになったか確認してください。途中失敗の場合は、片方だけ進んでいる可能性があるため手動で位置を合わせてください。")
+                            .foregroundStyle(.orange)
+                        Button("両アプリの次ページを手動確認済み") { automation.acknowledgeNavigation(capture: capture) }
+                            .disabled(automation.running)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                }
             }
             ProgressView(value: automation.progress)
             Text("現在の操作：\(automation.operation)\(automation.paused ? "（一時停止中）" : "")")

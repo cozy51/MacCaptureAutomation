@@ -30,6 +30,9 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var progress = 0.0
     @Published private(set) var pasteUncertain = false
     @Published private(set) var backgroundUncertain = false
+    @Published private(set) var readyForNextPage = UserDefaults.standard.bool(forKey: "readyForNextPage.v1")
+    @Published private(set) var navigationUncertain = UserDefaults.standard.bool(forKey: "navigationUncertain.v1")
+    @Published private(set) var navigationStage = UserDefaults.standard.string(forKey: "navigationStage.v1") ?? "未実行"
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
@@ -66,6 +69,8 @@ final class AutomationModel: ObservableObject {
         backgroundUncertain = false
         UserDefaults.standard.set(false, forKey: "backgroundUncertain")
         if combinedBackgroundPending {
+            readyForNextPage = true
+            UserDefaults.standard.set(true, forKey: "readyForNextPage.v1")
             pasteUncertain = false
             combinedBackgroundPending = false
             UserDefaults.standard.set(false, forKey: "pasteUncertain")
@@ -202,6 +207,9 @@ final class AutomationModel: ObservableObject {
     }
     func start(capture: CaptureModel, transfer: Bool, chromeKeyTest: Bool = false, setBackground: Bool = false) {
         guard !running, !capture.busy else { return }
+        if transfer && (readyForNextPage || navigationUncertain) {
+            capture.record("先に次スライド・次ページへの移動と結果確認を完了してください。"); return
+        }
         if transfer && backgroundUncertain { capture.record("背景設定の結果を先に確認してください。"); return }
         if transfer && pasteUncertain { capture.record("前回の貼り付け結果を手動確認し、確認済みボタンを押してください。"); return }
         let config = settings
@@ -471,6 +479,101 @@ extension AutomationModel {
                 operation = "背景設定テスト停止"; capture.record("背景設定テストを停止しました。実行済みの操作は取り消せません。")
             } catch {
                 errors += 1; operation = "背景設定テスト：エラーで停止"; capture.record(error.localizedDescription)
+            }
+        }
+    }
+}
+
+
+extension AutomationModel {
+    private func focusedSlideList(_ application: AXUIElement) throws -> (AXUIElement, AXUIElement) {
+        guard var current = focusedElement(application) else {
+            throw AutomationFailure(message: "Chromeのフォーカスを取得できません。左側のスライド一覧をクリックしてください。")
+        }
+        for _ in 0..<12 {
+            let role = axString(current, "AXRole")
+            if role == "AXTextField" || role == "AXTextArea" {
+                throw AutomationFailure(message: "文字編集中です。左側のスライド一覧をクリックしてください。")
+            }
+            if ["AXList", "AXOutline"].contains(role) {
+                let selected = axElements(current, "AXSelectedChildren")
+                if selected.count == 1, let slide = selected.first {
+                    let labels = [axString(current, "AXTitle"), axString(current, "AXDescription"),
+                                  axString(slide, "AXTitle"), axString(slide, "AXDescription")].joined(separator: " ").lowercased()
+                    if labels.contains("スライド") || labels.contains("slide") { return (current, slide) }
+                }
+            }
+            guard let parent = axValue(current, "AXParent"), CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+            current = unsafeBitCast(parent, to: AXUIElement.self)
+        }
+        throw AutomationFailure(message: "選択中のスライド一覧をAccessibility APIで確認できません。Chromeの左側のサムネイルをクリックしてください。取得できない環境ではページ送りを停止します。")
+    }
+    private func setNavigationStage(_ text: String) {
+        navigationStage = text
+        UserDefaults.standard.set(text, forKey: "navigationStage.v1")
+    }
+    func acknowledgeNavigation(capture: CaptureModel) {
+        guard !running, readyForNextPage || navigationUncertain else { return }
+        readyForNextPage = false; navigationUncertain = false
+        UserDefaults.standard.set(false, forKey: "readyForNextPage.v1")
+        UserDefaults.standard.set(false, forKey: "navigationUncertain.v1")
+        setNavigationStage("両アプリの次ページを手動確認済み")
+        capture.record("次スライドとKindleの次ページをユーザーが確認しました。次の1回実行が可能です。")
+    }
+    func advancePages(capture: CaptureModel) {
+        guard !running, !capture.busy, readyForNextPage, !navigationUncertain,
+              !pasteUncertain, !backgroundUncertain else { return }
+        let config = settings
+        guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay), presentationID(config.presentationURL) != nil else {
+            capture.record("対象URLと切り替え待機を確認してください。"); return
+        }
+        save(); running = true; paused = false; progress = 0; started = Date()
+        task = Task {
+            defer { self.running = false; self.paused = false; self.task = nil }
+            do {
+                _ = try application(config.kindleID)
+                operation = "次スライド送り：Chromeへ切り替え"; capture.record(operation)
+                let chrome = try await activate("com.google.Chrome", delay: config.switchDelay)
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                let application = AXUIElementCreateApplication(chrome.processIdentifier)
+                AXUIElementSetMessagingTimeout(application, 0.5)
+                let (list, previousSlide) = try focusedSlideList(application)
+                try await checkpoint()
+                try verifySlides(chrome, expectedURL: config.presentationURL)
+                navigationUncertain = true
+                UserDefaults.standard.set(true, forKey: "navigationUncertain.v1")
+                setNavigationStage("Chromeへ下矢印を送信予定・結果未確認")
+                try sendKey(125, flags: [], app: chrome)
+                operation = "Chromeの選択スライド変更を確認"
+                var changed = false
+                for _ in 0..<30 {
+                    try await wait(0.1)
+                    try verifySlides(chrome, expectedURL: config.presentationURL)
+                    let selected = axElements(list, "AXSelectedChildren")
+                    if selected.count == 1, let next = selected.first, !CFEqual(previousSlide, next) {
+                        changed = true; break
+                    }
+                }
+                guard changed else {
+                    throw AutomationFailure(message: "次スライドへの選択変更を確認できません。Kindleは送っていません。両アプリの位置を手動確認・調整してください。")
+                }
+                setNavigationStage("Chromeの選択変更を確認・Kindle未送信")
+                capture.record("Chromeの選択スライドが変わったことを確認しました。")
+                progress = 0.5
+                operation = "次ページ送り：Kindleへ切り替え"
+                let kindle = try await activate(config.kindleID, delay: config.switchDelay)
+                try await checkpoint()
+                setNavigationStage("Kindleへ下矢印を送信予定・結果未確認")
+                try sendKey(125, flags: [], app: kindle)
+                try await wait(0.5)
+                setNavigationStage("両アプリへ下矢印送信済み・手動確認待ち")
+                operation = "次スライド・次ページの手動確認待ち"
+                progress = 1
+                capture.record("Kindleへ下矢印を送信しました。両アプリが次のページになったことを手動確認してください。自動で再送しません。")
+            } catch is CancellationError {
+                operation = "ページ送り停止"; capture.record("ページ送りを停止しました。送信済み操作は取り消せません。実行段階を確認してください。")
+            } catch {
+                errors += 1; operation = "ページ送り：エラーで停止"; capture.record(error.localizedDescription)
             }
         }
     }
