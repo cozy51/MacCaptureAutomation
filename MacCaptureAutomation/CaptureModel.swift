@@ -43,6 +43,7 @@ final class CaptureModel: ObservableObject {
     var selected: CapturePreset? { presets.first { $0.id == selectedID } }
 
     init() {
+        logs = Array((defaults.stringArray(forKey: "executionLogs.v1") ?? []).suffix(1000))
         if let data = defaults.data(forKey: storageKey) {
             do { presets = try JSONDecoder().decode([CapturePreset].self, from: data) }
             catch { message = "保存データを読み込めませんでした。既存データは保持しています。" }
@@ -53,8 +54,9 @@ final class CaptureModel: ObservableObject {
 
     func record(_ text: String) {
         message = text
-        logs.append("\(Date().formatted(date: .omitted, time: .standard))  \(text)")
-        if logs.count > 200 { logs.removeFirst(logs.count - 200) }
+        logs.append("\(Date().formatted(date: .numeric, time: .standard))  \(text)")
+        if logs.count > 1000 { logs.removeFirst(logs.count - 1000) }
+        defaults.set(logs, forKey: "executionLogs.v1")
     }
 
     func persist() {

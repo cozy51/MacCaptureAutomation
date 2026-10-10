@@ -84,8 +84,15 @@ struct ContentView: View {
         }
     }
     private var logView: some View {
-        GroupBox("実行ログ（今回の起動）") {
+        GroupBox("実行履歴（最新1000件・再起動後も保持）") {
             VStack(alignment: .leading, spacing: 6) {
+                Button("履歴をコピー") {
+                    let board = NSPasteboard.general
+                    board.clearContents()
+                    board.setString(model.logs.joined(separator: "\n"), forType: .string)
+                }.disabled(model.logs.isEmpty || automation.running || model.busy)
+                Text("コピーするとクリップボードの内容が履歴のテキストに置き換わります。実行中はコピーできません。")
+                    .font(.caption).foregroundStyle(.secondary)
                 if model.logs.isEmpty { Text("ログはありません").foregroundStyle(.secondary) }
                 ForEach(Array(model.logs.enumerated()), id: \.offset) { _, entry in Text(entry).textSelection(.enabled) }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
