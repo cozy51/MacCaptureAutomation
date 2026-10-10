@@ -545,6 +545,14 @@ extension AutomationModel {
             guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
             current = unsafeBitCast(value, to: AXUIElement.self)
             if axString(current, "AXRole") == "AXMenu" { return current }
+            // Slides exposes its web menus as AXGroup rather than AXMenu.
+            // Individual rows are also groups, so require multiple sibling items.
+            if axString(current, "AXRole") == "AXGroup" {
+                let children = axElements(current, "AXChildren")
+                let rows = children + children.filter { axString($0, "AXRole") == "AXGroup" }
+                    .flatMap { axElements($0, "AXChildren") }
+                if rows.filter({ axString($0, "AXRole") == "AXMenuItem" }).count >= 2 { return current }
+            }
         }
         return nil
     }
@@ -590,8 +598,18 @@ extension AutomationModel {
             try await checkpoint()
             try verifySlides(chrome, expectedURL: expectedURL)
             let liveItems = try await namedMenuItems(application, names: names)
-            guard liveItems.count == 1, let target = liveItems.first, let menu = parentMenu(target) else {
+            guard liveItems.count == 1, let target = liveItems.first else {
                 throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(liveItems.count)件）。メニューが開いているか確認してください。Enterは送信していません。")
+            }
+            guard let menu = parentMenu(target) else {
+                var current = target
+                var roles = [axString(current, "AXRole")]
+                for _ in 0..<12 {
+                    guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { break }
+                    current = unsafeBitCast(value, to: AXUIElement.self)
+                    roles.append(axString(current, "AXRole"))
+                }
+                throw AutomationFailure(message: "『\(targetName)』は1件取得しましたが、所属メニューを確認できません。親階層: \(roles.joined(separator: " → "))。Enterは送信していません。")
             }
             let selected = keyboardSelectedMenuItems(menu, application: application)
             unreadableSelections = selected.isEmpty ? unreadableSelections + 1 : 0
