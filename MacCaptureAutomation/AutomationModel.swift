@@ -86,7 +86,7 @@ final class AutomationModel: ObservableObject {
     private func activate(_ id: String, delay: Double) async throws -> NSRunningApplication {
         try await checkpoint()
         let app = try application(id)
-        guard app.activate(options: [.activateIgnoringOtherApps]) else { throw AutomationFailure(message: "アプリ切り替えに失敗しました。") }
+        guard app.activate(options: []) else { throw AutomationFailure(message: "アプリ切り替えに失敗しました。") }
         try await wait(delay)
         try verifyFrontmost(app)
         return app

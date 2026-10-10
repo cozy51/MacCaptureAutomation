@@ -6,7 +6,7 @@ final class SelectionCoordinator {
     private var completion: ((NSScreen?, CGRect?) -> Void)?
     init(completion: @escaping (NSScreen?, CGRect?) -> Void) { self.completion = completion }
     func begin() {
-        NSApp.activate(ignoringOtherApps: true)
+        NSApp.activate()
         for screen in NSScreen.screens {
             let window = SelectionWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
