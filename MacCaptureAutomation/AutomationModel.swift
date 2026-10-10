@@ -382,16 +382,23 @@ extension AutomationModel {
         }
         return matches
     }
-    private func menuClickEvents(_ item: AXUIElement) throws -> (CGEvent, CGEvent) {
-        let title = axString(item, "AXTitle").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard axString(item, "AXRole") == "AXMenuItem",
-              ["画像を背景に設定", "Set image as background"].contains(title),
+    private func menuClickEvents(_ item: AXUIElement, newSlide: Bool = false) throws -> (CGEvent, CGEvent) {
+        let targetName = newSlide ? "新しいスライドのボタン" : "背景設定項目"
+        let labels = [axString(item, "AXTitle"), axString(item, "AXDescription")]
+        let expected = newSlide ? ["新しいスライド", "新規スライド", "New slide"] : ["画像を背景に設定", "Set image as background"]
+        let named = labels.contains { label in
+            let text = label.trimmingCharacters(in: .whitespacesAndNewlines)
+            return expected.contains { name in
+                text == name || (newSlide && (text.hasPrefix(name + " (") || text.hasPrefix(name + "（")))
+            }
+        }
+        guard axString(item, "AXRole") == (newSlide ? "AXButton" : "AXMenuItem"), named,
               (axValue(item, "AXEnabled") as? Bool) == true,
               let positionValue = axValue(item, "AXPosition"),
               let sizeValue = axValue(item, "AXSize"),
               CFGetTypeID(positionValue) == AXValueGetTypeID(),
               CFGetTypeID(sizeValue) == AXValueGetTypeID() else {
-            throw AutomationFailure(message: "背景設定項目の有効状態・位置・サイズを確認できません。クリックしていません。")
+            throw AutomationFailure(message: "\(targetName)の有効状態・位置・サイズを確認できません。クリックしていません。")
         }
         let position = unsafeBitCast(positionValue, to: AXValue.self)
         let size = unsafeBitCast(sizeValue, to: AXValue.self)
@@ -402,14 +409,14 @@ extension AutomationModel {
               point.x.isFinite, point.y.isFinite,
               dimensions.width.isFinite, dimensions.height.isFinite,
               dimensions.width > 0, dimensions.height > 0 else {
-            throw AutomationFailure(message: "背景設定項目の座標が無効です。クリックしていません。")
+            throw AutomationFailure(message: "\(targetName)の座標が無効です。クリックしていません。")
         }
         // AXPosition and CGEvent both use global top-left point coordinates.
         let center = CGPoint(x: point.x + dimensions.width / 2, y: point.y + dimensions.height / 2)
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(AXUIElementCreateSystemWide(), Float(center.x), Float(center.y), &hit) == .success,
               var current = hit else {
-            throw AutomationFailure(message: "背景設定項目の位置をヒットテストで確認できません。クリックしていません。")
+            throw AutomationFailure(message: "\(targetName)の位置をヒットテストで確認できません。クリックしていません。")
         }
         var matches = false
         for _ in 0..<12 {
@@ -418,7 +425,7 @@ extension AutomationModel {
             current = unsafeBitCast(parent, to: AXUIElement.self)
         }
         guard matches else {
-            throw AutomationFailure(message: "背景設定項目の位置が別の要素に重なっています。クリックしていません。")
+            throw AutomationFailure(message: "\(targetName)の位置が別の要素に重なっています。クリックしていません。")
         }
         guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: center, mouseButton: .left),
               let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: center, mouseButton: .left) else {
@@ -562,11 +569,6 @@ extension AutomationModel {
         guard matches.count == 1, let button = matches.first else {
             throw AutomationFailure(message: "新しいスライドのボタンを一意に取得できません（\(matches.count)件）。追加操作は実行していません。複製モードか手動追加を使用してください。")
         }
-        var actions: CFArray?
-        guard AXUIElementCopyActionNames(button, &actions) == .success,
-              let names = actions as? [String], names.contains("AXPress") else {
-            throw AutomationFailure(message: "新しいスライドのボタンにAXPressがありません。追加操作は実行していません。")
-        }
         return button
     }
     private func focusedSlideList(_ application: AXUIElement) throws -> (AXUIElement, AXUIElement) {
@@ -631,6 +633,16 @@ extension AutomationModel {
                 if mode == .add { addButton = try await newSlideButton(application) }
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: config.presentationURL)
+                var addUsesPress = false
+                var addClickEvents: (CGEvent, CGEvent)?
+                if let addButton {
+                    var actions: CFArray?
+                    let readResult = AXUIElementCopyActionNames(addButton, &actions)
+                    let names = actions as? [String] ?? []
+                    addUsesPress = readResult == .success && names.contains("AXPress")
+                    capture.record("新規追加ボタンの公開操作: \(names.joined(separator: ", "))。使用操作: \(addUsesPress ? "AXPress" : "AX位置クリック")")
+                    if !addUsesPress { addClickEvents = try menuClickEvents(addButton, newSlide: true) }
+                }
                 navigationUncertain = true
                 UserDefaults.standard.set(true, forKey: "navigationUncertain.v1")
                 setNavigationStage("Chrome操作予定：\(mode.title)・結果未確認")
@@ -638,11 +650,16 @@ extension AutomationModel {
                 capture.record(operation)
                 if mode == .add {
                     guard let addButton else { throw AutomationFailure(message: "新規追加ボタンがありません。") }
-                    let result = AXUIElementPerformAction(addButton, "AXPress" as CFString)
-                    guard result == .success else {
-                        throw AutomationFailure(message: "新規追加の結果が不明です（AXエラー \(result.rawValue)）。再送せず手動確認してください。Kindleは送っていません。")
+                    if addUsesPress {
+                        let result = AXUIElementPerformAction(addButton, "AXPress" as CFString)
+                        guard result == .success else {
+                            throw AutomationFailure(message: "新規追加の結果が不明です（AXエラー \(result.rawValue)）。再送せず手動確認してください。Kindleは送っていません。")
+                        }
+                        capture.record("新しいスライドのボタンにAXPressを送りました。作成結果は手動確認してください。")
+                    } else if let (down, up) = addClickEvents {
+                        down.post(tap: .cghidEventTap); up.post(tap: .cghidEventTap)
+                        capture.record("AX位置とヒットテストで確認した新規追加ボタンをクリックしました。作成結果は手動確認してください。")
                     }
-                    capture.record("新しいスライドのボタンにAXPressを送りました。作成結果は手動確認してください。")
                 } else if let code = mode.keyCode {
                     try sendKey(code, flags: mode.flags, app: chrome)
                 }
