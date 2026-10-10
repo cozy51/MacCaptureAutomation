@@ -616,6 +616,7 @@ extension AutomationModel {
         capture.record("『\(targetName)』を\(upward ? "上" : "下")矢印で探索します。")
         var lastSelection = ""
         var unreadableSelections = 0
+        var stalledGridSelections = 0
         for index in 0..<80 {
             try await checkpoint()
             try verifySlides(chrome, expectedURL: expectedURL)
@@ -644,6 +645,12 @@ extension AutomationModel {
                 throw AutomationFailure(message: "Chromeのメニュー選択状態を取得できません。Enterもクリックも送信していません。探索元: \(axString(menu, "AXRole"))／\(axString(menu, "AXTitle"))。フォーカス: \(focusDescription)。『\(targetName)』の公開属性: \(names)")
             }
             let selection = selected.map { axString($0, "AXTitle") }.joined(separator: ", ")
+            if axString(menu, "AXRole") == "AXTable", !selection.isEmpty {
+                stalledGridSelections = selection == lastSelection ? stalledGridSelections + 1 : 0
+                if stalledGridSelections >= 3 {
+                    throw AutomationFailure(message: "レイアウト一覧の選択が『\(selection)』から移動しません。Enterは送信していません。")
+                }
+            }
             if selection != lastSelection {
                 capture.record("『\(targetName)』メニューの選択項目：\(selection.isEmpty ? "取得できません" : selection)")
                 lastSelection = selection
@@ -665,8 +672,7 @@ extension AutomationModel {
             }
             if index == 79 { break }
             var direction: Int = upward ? 126 : 125
-            if axString(menu, "AXRole") == "AXTable", selected.count == 1,
-               let selectedContainer = parentMenu(selected[0]), CFEqual(selectedContainer, menu) {
+            if axString(menu, "AXRole") == "AXTable", selected.count == 1 {
                 // Layout choices form a grid. Use their AX positions only to
                 // choose an arrow direction; activation still requires exact
                 // focused-element equality with the target before Enter.
@@ -677,14 +683,35 @@ extension AutomationModel {
                           point.x.isFinite, point.y.isFinite else { return nil }
                     return point
                 }
+                func ancestor(_ element: AXUIElement, role: String) -> AXUIElement? {
+                    var current = element
+                    for _ in 0..<12 {
+                        guard let value = axValue(current, "AXParent"), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+                        current = unsafeBitCast(value, to: AXUIElement.self)
+                        if axString(current, "AXRole") == role { return current }
+                    }
+                    return nil
+                }
+                guard let currentRow = ancestor(selected[0], role: "AXRow"),
+                      let destinationRow = ancestor(target, role: "AXRow"),
+                      let currentTable = ancestor(selected[0], role: "AXTable"), CFEqual(currentTable, menu) else {
+                    // Focus may initially remain on the parent menu item.
+                    try sendKey(125, flags: [], app: chrome)
+                    try await wait(0.2)
+                    continue
+                }
                 guard let current = position(selected[0]), let destination = position(target) else {
                     throw AutomationFailure(message: "レイアウト一覧の選択位置を取得できません。Enterもクリックも送信していません。")
                 }
-                if abs(destination.y - current.y) > 5 {
-                    direction = destination.y > current.y ? 125 : 126
-                } else {
+                if CFEqual(currentRow, destinationRow) {
                     direction = destination.x > current.x ? 124 : 123
+                } else {
+                    guard let rowPosition = position(currentRow), let targetRowPosition = position(destinationRow) else {
+                        throw AutomationFailure(message: "レイアウト一覧の行位置を取得できません。Enterは送信していません。")
+                    }
+                    direction = targetRowPosition.y > rowPosition.y ? 125 : 126
                 }
+                capture.record("レイアウト一覧：『\(selection)』から\(direction == 124 ? "右" : direction == 123 ? "左" : direction == 125 ? "下" : "上")矢印を送信します。")
             }
             try sendKey(direction, flags: [], app: chrome)
             try await wait(0.08)
