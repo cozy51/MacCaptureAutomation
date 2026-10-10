@@ -591,7 +591,11 @@ extension AutomationModel {
         }
         var unique: [AXUIElement] = []
         for candidate in candidates {
-            guard axString(candidate, "AXRole") == "AXMenuItem", let parent = parentMenu(candidate), CFEqual(parent, menu),
+            // Chrome can expose AXParent through a wrapper that differs from
+            // the live menu's child tree. Establish membership using the tree
+            // just traversed, which also excludes nested AXMenu submenus.
+            guard axString(candidate, "AXRole") == "AXMenuItem",
+                  visited.contains(where: { CFEqual($0, candidate) }),
                   !unique.contains(where: { CFEqual($0, candidate) }) else { continue }
             unique.append(candidate)
         }
