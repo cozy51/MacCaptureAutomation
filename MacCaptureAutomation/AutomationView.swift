@@ -33,6 +33,8 @@ struct AutomationView: View {
                 Stepper("処理ページ数：\(automation.continuousPages)", value: $automation.continuousPages, in: 1...500)
                     .disabled(automation.running)
                 Text("現在のスライドに1ページ目を貼り付け、以降は新規スライドを追加して空白レイアウトにします。最後は追加・ページ送りをせず終了します。")
+                Text("スライド追加・空白レイアウト選択・背景設定はマウスクリックを使わず、メニュー項目の選択を確認してキーで実行します。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("最初は2ページで試してください。背景化とページ移動の成功は自動判定できません。操作中はキーボード・マウスを操作せず、終了後に全ページの対応を確認してください。")
                     .foregroundStyle(.secondary)
                 Text("撮影画像が前ページと完全に同じ場合は、次の貼り付け前に停止します。画像の変化だけでは正しい次ページと確定できません。")
