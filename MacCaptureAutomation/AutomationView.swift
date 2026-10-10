@@ -35,11 +35,17 @@ struct AutomationView: View {
             GroupBox("背景設定テスト") {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Chromeで画像を1枚選択してから実行します。撮影・貼り付け・ページ送りは行いません。")
+                    Picker("メニュー表示キー", selection: $automation.menuShortcut) {
+                        Text("Shift + F10").tag(0)
+                        Text("Command + Shift + バックスラッシュ").tag(1)
+                        Text("Control + Shift + バックスラッシュ").tag(2)
+                    }.disabled(automation.running)
+                        .onChange(of: automation.menuShortcut) { _, _ in automation.save() }
                     Button("背景設定テスト") { automation.testBackground(capture: capture) }
                         .disabled(automation.running || automation.backgroundUncertain || capture.busy)
                     Button("メニューを手動で開いてテスト") { automation.testBackground(capture: capture, manualMenu: true) }
                         .disabled(automation.running || automation.backgroundUncertain || capture.busy)
-                    Text("通常テストで選択画像を取得できない場合は手動メニュー方式を使用します。Chromeに切り替わった後、5秒以内に選択画像を右クリックしてください。項目の実行操作が公開されない場合は、AXで取得した位置を検証してクリックします。")
+                    Text("通常テストは選択情報を取得できなくてもメニュー表示を試し、有効な背景設定項目を確認します。メニューが開かない場合は表示キーを変更するか、手動メニュー方式を使用してください。Chromeに切り替わった後、5秒以内に選択画像を右クリックしてください。項目の実行操作が公開されない場合は、AXで取得した位置を検証してクリックします。")
                         .foregroundStyle(.secondary)
                     if automation.backgroundUncertain {
                         Text("結果を確認してください：選択枠が消え、画像をクリックしても画像オブジェクトとして選択されず、スライド全面の背景になっていますか？結果不明なら再実行しないでください。")

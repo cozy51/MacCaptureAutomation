@@ -30,6 +30,7 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var progress = 0.0
     @Published private(set) var pasteUncertain = false
     @Published private(set) var backgroundUncertain = false
+    @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
     private let storageKey = "automationSettings.v1"
@@ -49,6 +50,7 @@ final class AutomationModel: ObservableObject {
         backgroundUncertain = UserDefaults.standard.bool(forKey: "backgroundUncertain")
     }
     func save() {
+        UserDefaults.standard.set(menuShortcut, forKey: "backgroundMenuShortcut.v1")
         if let data = try? JSONEncoder().encode(settings) { UserDefaults.standard.set(data, forKey: storageKey) }
     }
     func acknowledgePaste() {
@@ -355,6 +357,7 @@ extension AutomationModel {
         guard !running, !capture.busy else { return }
         guard !backgroundUncertain else { capture.record("前回の背景設定の結果を確認してから再テストしてください。"); return }
         let config = settings
+        let shortcut = menuShortcut
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay),
               presentationID(config.presentationURL) != nil else {
             capture.record("対象のGoogleスライドURLと0〜60秒の切り替え待機を設定してください。"); return
@@ -373,21 +376,35 @@ extension AutomationModel {
                     try await wait(5)
                 } else {
                     operation = "画像選択状態を確認"
-                    guard try await selectedImage(application) else {
-                        throw AutomationFailure(message: "Accessibility APIで選択画像を確認できません。画像を選択してください。Chromeが選択情報を公開しない場合は『メニューを手動で開いてテスト』を使用してください。")
+                    if try await selectedImage(application) {
+                        capture.record("Accessibility APIで選択画像を確認しました。")
+                    } else {
+                        capture.record("画像選択情報は取得できません。メニュー表示後の有効な背景設定項目を確認してから実行します。")
                     }
                     try await checkpoint()
                     try verifySlides(chrome, expectedURL: config.presentationURL)
-                    // Shift+F10 is the context-menu shortcut. No fixed-coordinate click.
-                    try sendKey(109, flags: [.maskShift], app: chrome)
-                    try await wait(0.5)
+                    operation = "画像のコンテキストメニューを自動表示"
+                    switch shortcut {
+                    case 0:
+                        try sendKey(109, flags: [.maskShift], app: chrome)
+                        capture.record("メニュー表示キー: Shift + F10")
+                    case 1:
+                        try sendKey(42, flags: [.maskCommand, .maskShift], app: chrome)
+                        capture.record("メニュー表示キー: Command + Shift + バックスラッシュ")
+                    case 2:
+                        try sendKey(42, flags: [.maskControl, .maskShift], app: chrome)
+                        capture.record("メニュー表示キー: Control + Shift + バックスラッシュ")
+                    default:
+                        throw AutomationFailure(message: "メニュー表示キーの設定が無効です。")
+                    }
+                    try await wait(1)
                 }
                 progress = 0.4
                 try verifySlides(chrome, expectedURL: config.presentationURL)
                 operation = "背景設定メニューを検索"
                 let items = try await backgroundMenuItems(application)
                 guard items.count == 1, let item = items.first else {
-                    throw AutomationFailure(message: "有効な『画像を背景に設定』メニューを一意に取得できません（\(items.count)件）。右クリックメニューが開いているか確認してください。操作は実行していません。")
+                    throw AutomationFailure(message: "有効な『画像を背景に設定』メニューを一意に取得できません（\(items.count)件）。画像を選択し、メニュー表示キーを変更して試してください。手動メニュー方式も利用できます。背景設定操作は実行していません。")
                 }
                 var actions: CFArray?
                 let actionReadResult = AXUIElementCopyActionNames(item, &actions)
