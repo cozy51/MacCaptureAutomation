@@ -93,6 +93,11 @@ final class AutomationModel: ObservableObject {
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
+    private var lastTargetApplication: NSRunningApplication?
+    private var lastTargetWindow: AXUIElement?
+    private var resumePresentationURL = ""
+    private var needsResumeActivation = false
+    private var restoringResumeFocus = false
     private let storageKey = "automationSettings.v1"
     private var combinedBackgroundPending = UserDefaults.standard.bool(forKey: "combinedBackgroundPending.v1")
 
@@ -147,8 +152,26 @@ final class AutomationModel: ObservableObject {
         capture.record("背景設定の結果をユーザーが確認しました。自動判定による成功ではありません。")
     }
     func pause() { guard running else { return }; paused = true }
-    func resume() { paused = false }
-    func stop() { task?.cancel(); paused = false }
+    func resume() {
+        guard running, paused else { return }
+        needsResumeActivation = true
+        paused = false
+    }
+    func stop() { task?.cancel(); paused = false; needsResumeActivation = false }
+    private func resetExecutionFocus() {
+        lastTargetApplication = nil; lastTargetWindow = nil
+        needsResumeActivation = false; restoringResumeFocus = false
+        resumePresentationURL = settings.presentationURL
+    }
+    private func focusedWindow(_ app: NSRunningApplication) throws -> AXUIElement {
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            throw AutomationFailure(message: "再開対象のウィンドウを確認できません。")
+        }
+        return unsafeBitCast(value, to: AXUIElement.self)
+    }
 
     private func checkpoint() async throws {
         try Task.checkCancellation()
@@ -157,6 +180,23 @@ final class AutomationModel: ObservableObject {
             try await Task.sleep(nanoseconds: 50_000_000)
             try Task.checkCancellation()
             elapsed = started.map { Date().timeIntervalSince($0) } ?? 0
+        }
+        if needsResumeActivation && !restoringResumeFocus {
+            needsResumeActivation = false
+            guard let target = lastTargetApplication, let id = target.bundleIdentifier else { return }
+            guard !target.isTerminated, try application(id).processIdentifier == target.processIdentifier else {
+                throw AutomationFailure(message: "一時停止中に対象アプリが終了・再起動しました。自動再開しません。")
+            }
+            let expectedWindow = lastTargetWindow
+            restoringResumeFocus = true
+            defer { restoringResumeFocus = false }
+            let app = try await activate(id, delay: settings.switchDelay)
+            if let expectedWindow, !CFEqual(try focusedWindow(app), expectedWindow) {
+                throw AutomationFailure(message: "一時停止中に対象ウィンドウが変わりました。自動再開しません。")
+            }
+            if id == "com.google.Chrome", presentationID(resumePresentationURL) != nil {
+                try verifySlides(app, expectedURL: resumePresentationURL)
+            }
         }
     }
     private func wait(_ seconds: Double) async throws {
@@ -179,6 +219,8 @@ final class AutomationModel: ObservableObject {
     private func activate(_ id: String, delay: Double) async throws -> NSRunningApplication {
         try await checkpoint()
         let app = try application(id)
+        if lastTargetApplication?.processIdentifier != app.processIdentifier { lastTargetWindow = nil }
+        lastTargetApplication = app
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
             // This app can be in the background after capturing Kindle. Ask
             // Launch Services to activate the existing target application.
@@ -215,6 +257,7 @@ final class AutomationModel: ObservableObject {
         }
         try await wait(delay)
         try verifyFrontmost(app)
+        lastTargetWindow = try focusedWindow(app)
         return app
     }
     private func verifyFrontmost(_ app: NSRunningApplication) throws {
@@ -290,7 +333,7 @@ final class AutomationModel: ObservableObject {
         if setBackground && !(0...2).contains(shortcut) {
             capture.record("メニュー表示キーを設定してください。"); return
         }
-        save(); running = true; paused = false; progress = 0; started = Date()
+        resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
         task = Task {
             defer { self.running = false; self.paused = false; self.task = nil }
             do {
@@ -551,7 +594,7 @@ extension AutomationModel {
               presentationID(config.presentationURL) != nil else {
             capture.record("対象のGoogleスライドURLと0〜60秒の切り替え待機を設定してください。"); return
         }
-        save(); running = true; paused = false; progress = 0; started = Date()
+        resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
         task = Task {
             defer { self.running = false; self.paused = false; self.task = nil }
             do {
@@ -694,7 +737,7 @@ extension AutomationModel {
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay), presentationID(config.presentationURL) != nil else {
             capture.record("対象URLと切り替え待機を確認してください。"); return
         }
-        save(); running = true; paused = false; progress = 0; started = Date()
+        resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
         task = Task {
             defer { self.running = false; self.paused = false; self.task = nil }
             do {
@@ -895,7 +938,7 @@ extension AutomationModel {
         let config = settings
         let shortcut = menuShortcut
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { capture.record("切り替え待機は0〜60秒にしてください。"); return }
-        save(); running = true; paused = false; progress = 0; started = Date()
+        resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
         if continuous { continuousDispatchedPages = 0 }
         task = Task {
             defer { self.running = false; self.paused = false; self.awaitingProcedureResult = false; self.task = nil }
@@ -1105,7 +1148,7 @@ extension AutomationModel {
                 capture.record("保存時と画面構成・対象アプリ・対象スライドが違います。配置を手動調整して保存し直してください。"); return
             }
         }
-        save(); running = true; paused = false; started = Date(); progress = 0
+        resetExecutionFocus(); save(); running = true; paused = false; started = Date(); progress = 0
         task = Task {
             defer { running = false; paused = false; task = nil }
             do {
