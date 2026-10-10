@@ -554,9 +554,10 @@ extension AutomationModel {
             // Chrome's Slides menu is exposed as AXMenuItem → AXMenuItem
             // → AXMenuBar, while its image context menu uses AXMenu.
             if role == "AXMenu" || role == "AXMenuBar" { return current }
-            // Slides exposes its web menus as AXGroup rather than AXMenu.
+            // A web popup can be owned by the top-level AXMenuItem ("スライド")
+            // or an AXGroup. Prefer that popup over the entire AXMenuBar.
             // Individual rows are also groups, so require multiple sibling items.
-            if axString(current, "AXRole") == "AXGroup" {
+            if role == "AXGroup" || role == "AXMenuItem" {
                 let children = axElements(current, "AXChildren")
                 let rows = children + children.filter { axString($0, "AXRole") == "AXGroup" }
                     .flatMap { axElements($0, "AXChildren") }
@@ -578,7 +579,7 @@ extension AutomationModel {
         }
         var pending = axElements(menu, "AXChildren")
         var visited: [AXUIElement] = []
-        while let element = pending.popLast(), visited.count < 250 {
+        while let element = pending.popLast(), visited.count < 1000 {
             if visited.contains(where: { CFEqual($0, element) }) { continue }
             visited.append(element)
             let role = axString(element, "AXRole")
@@ -626,7 +627,9 @@ extension AutomationModel {
                 var attributes: CFArray?
                 AXUIElementCopyAttributeNames(target, &attributes)
                 let names = (attributes as? [String] ?? []).joined(separator: ", ")
-                throw AutomationFailure(message: "Chromeのメニュー選択状態を取得できません。Enterもクリックも送信していません。『\(targetName)』の公開属性: \(names)")
+                let focus = focusedElement(application)
+                let focusDescription = focus.map { "\(axString($0, "AXRole"))／\(axString($0, "AXTitle"))／\(axString($0, "AXDescription"))" } ?? "なし"
+                throw AutomationFailure(message: "Chromeのメニュー選択状態を取得できません。Enterもクリックも送信していません。探索元: \(axString(menu, "AXRole"))／\(axString(menu, "AXTitle"))。フォーカス: \(focusDescription)。『\(targetName)』の公開属性: \(names)")
             }
             let selection = selected.map { axString($0, "AXTitle") }.joined(separator: ", ")
             if selection != lastSelection {
