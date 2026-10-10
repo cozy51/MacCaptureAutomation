@@ -508,7 +508,14 @@ extension AutomationModel {
     private func menuTitleMatches(_ text: String, names: [String]) -> Bool {
         let title = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return names.contains { name in
-            title == name || [" (", "（", "\t", " ⌘", " Ctrl", " Command"].contains { title.hasPrefix(name + $0) }
+            if title == name || [" (", "（", "\t", " ⌘", " Ctrl", " Command"].contains(where: { title.hasPrefix(name + $0) }) {
+                return true
+            }
+            // Chrome exposes Slides access keys without parentheses, for example
+            // "新しいスライド n Ctrl+M" and "レイアウトを適用 a".
+            let pattern = "^" + NSRegularExpression.escapedPattern(for: name)
+                + "\\s+[A-Za-z](?:\\s+(?:Ctrl|Control|Alt|Option|Shift|Command|Cmd|⌘|⌥|⇧|⌃).*)?$"
+            return title.range(of: pattern, options: .regularExpression) != nil
         }
     }
     private func namedMenuItems(_ application: AXUIElement, names: [String]) async throws -> [AXUIElement] {
