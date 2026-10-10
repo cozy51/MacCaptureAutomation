@@ -37,6 +37,10 @@ struct AutomationView: View {
                     .foregroundStyle(.secondary)
                 Text("撮影画像が前ページと完全に同じ場合は、次の貼り付け前に停止します。画像の変化だけでは正しい次ページと確定できません。")
                     .font(.caption).foregroundStyle(.secondary)
+                Text(automation.globalShortcutsAvailable
+                     ? "マウスを動かさず操作：Control＋Option＋Command＋Pで一時停止／再開、Control＋Option＋Command＋Sで停止。Kindle・Chromeが前面でも使えます。"
+                     : "グローバルショートカットを登録できません。他のアプリとの競合や、このアプリの別ウィンドウがないか確認してください。")
+                    .foregroundStyle(automation.globalShortcutsAvailable ? Color.secondary : Color.orange)
                 Button("撮影→貼り付け→背景設定を連続実行") { automation.startContinuous(capture: capture) }
                     .buttonStyle(.borderedProminent)
                     .disabled(!automation.canRunPlanPage || automation.plan.active || capture.busy)

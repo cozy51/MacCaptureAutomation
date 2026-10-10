@@ -2,6 +2,47 @@ import AppKit
 import SwiftUI
 import ApplicationServices
 import CryptoKit
+import Carbon
+
+private final class AutomationHotkeys {
+    private var eventHandler: EventHandlerRef?
+    private var keys: [EventHotKeyRef] = []
+    private let action: (UInt32) -> Void
+    private(set) var available = false
+    init(action: @escaping (UInt32) -> Void) {
+        self.action = action
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+        let installed = InstallEventHandler(GetApplicationEventTarget(), { _, event, context in
+            guard let event, let context else { return OSStatus(eventNotHandledErr) }
+            var identifier = EventHotKeyID()
+            let result = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                          nil, UInt32(MemoryLayout<EventHotKeyID>.size), nil, &identifier)
+            guard result == noErr, identifier.signature == OSType(0x4D434148) else { return OSStatus(eventNotHandledErr) }
+            let controller = Unmanaged<AutomationHotkeys>.fromOpaque(context).takeUnretainedValue()
+            let id = identifier.id
+            DispatchQueue.main.async { controller.action(id) }
+            return noErr
+        }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), &eventHandler)
+        guard installed == noErr else { return }
+        let registrations: [(UInt32, UInt32)] = [(35, 1), (1, 2)]
+        for (code, id) in registrations {
+            var reference: EventHotKeyRef?
+            let result = RegisterEventHotKey(code, UInt32(cmdKey | optionKey | controlKey),
+                                            EventHotKeyID(signature: OSType(0x4D434148), id: id),
+                                            GetApplicationEventTarget(), 0, &reference)
+            guard result == noErr, let reference else { invalidate(); return }
+            keys.append(reference)
+        }
+        available = true
+    }
+    private func invalidate() {
+        for key in keys { UnregisterEventHotKey(key) }
+        keys.removeAll()
+        if let eventHandler { RemoveEventHandler(eventHandler) }
+        eventHandler = nil; available = false
+    }
+    deinit { invalidate() }
+}
 
 struct AutomationSettings: Codable {
     var kindleID = "com.amazon.Kindle"
@@ -72,6 +113,7 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var awaitingProcedureResult = false
     @Published private(set) var procedureStatus = UserDefaults.standard.string(forKey: "procedureResultStage.v1") ?? "手順実行は待機中"
     @Published private(set) var running = false
+    @Published private(set) var globalShortcutsAvailable = false
     @Published private(set) var windowLayout = WindowLayout.restore()
     @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
     @Published var continuousPages = 2
@@ -93,6 +135,7 @@ final class AutomationModel: ObservableObject {
     @Published var menuShortcut = UserDefaults.standard.integer(forKey: "backgroundMenuShortcut.v1")
     private var task: Task<Void, Never>?
     private var started: Date?
+    private var hotkeys: AutomationHotkeys?
     private var lastTargetApplication: NSRunningApplication?
     private var lastTargetWindow: AXUIElement?
     private var resumePresentationURL = ""
@@ -114,6 +157,15 @@ final class AutomationModel: ObservableObject {
         }
         pasteUncertain = UserDefaults.standard.bool(forKey: "pasteUncertain")
         backgroundUncertain = UserDefaults.standard.bool(forKey: "backgroundUncertain")
+        hotkeys = AutomationHotkeys { [weak self] id in
+            Task { @MainActor [weak self] in
+                guard let self, self.running else { return }
+                if id == 1 {
+                    if self.paused { self.resume() } else { self.pause() }
+                } else if id == 2 { self.stop() }
+            }
+        }
+        globalShortcutsAvailable = hotkeys?.available == true
     }
     func save() {
         UserDefaults.standard.set(menuShortcut, forKey: "backgroundMenuShortcut.v1")
