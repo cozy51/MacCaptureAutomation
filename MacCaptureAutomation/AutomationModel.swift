@@ -384,17 +384,17 @@ extension AutomationModel {
     }
     private func menuClickEvents(_ item: AXUIElement, newSlide: Bool = false, layoutTarget: String? = nil) throws -> (CGEvent, CGEvent) {
         let targetName = layoutTarget ?? (newSlide ? "新しいスライドのボタン" : "背景設定項目")
-        let labels = [axString(item, "AXTitle"), axString(item, "AXDescription")]
-        let expected = layoutTarget == "レイアウト" ? ["レイアウト", "Layout"] :
+        let labels = [axString(item, "AXTitle"), axString(item, "AXDescription")] + (layoutTarget == nil ? [] : [axString(item, "AXHelp")])
+        let expected = layoutTarget == "レイアウト" ? ["レイアウト", "レイアウトを適用", "スライドのレイアウト", "Layout", "Apply layout", "Slide layout"] :
             layoutTarget == "空白" ? ["空白", "Blank"] :
             newSlide ? ["新しいスライド", "新規スライド", "New slide"] : ["画像を背景に設定", "Set image as background"]
-        let roles = layoutTarget == "レイアウト" ? ["AXButton", "AXPopUpButton"] :
+        let roles = layoutTarget == "レイアウト" ? ["AXButton", "AXPopUpButton", "AXMenuButton", "AXMenuBarItem", "AXMenuItem"] :
             layoutTarget == "空白" ? ["AXMenuItem", "AXButton", "AXRadioButton"] :
             [newSlide ? "AXButton" : "AXMenuItem"]
         let named = labels.contains { label in
             let text = label.trimmingCharacters(in: .whitespacesAndNewlines)
             return expected.contains { name in
-                text == name || (newSlide && (text.hasPrefix(name + " (") || text.hasPrefix(name + "（")))
+                text == name || ((newSlide || layoutTarget != nil) && (text.hasPrefix(name + " (") || text.hasPrefix(name + "（")))
             }
         }
         guard roles.contains(axString(item, "AXRole")), named,
@@ -577,26 +577,33 @@ extension AutomationModel {
         return button
     }
     private func layoutElement(_ application: AXUIElement, target: String) async throws -> AXUIElement {
-        let names = target == "レイアウト" ? ["レイアウト", "Layout"] : ["空白", "Blank"]
-        let roles = target == "レイアウト" ? ["AXButton", "AXPopUpButton"] : ["AXMenuItem", "AXButton", "AXRadioButton"]
+        let names = target == "レイアウト" ? ["レイアウト", "レイアウトを適用", "スライドのレイアウト", "Layout", "Apply layout", "Slide layout"] : ["空白", "Blank"]
+        let roles = target == "レイアウト" ? ["AXButton", "AXPopUpButton", "AXMenuButton", "AXMenuBarItem", "AXMenuItem"] : ["AXMenuItem", "AXButton", "AXRadioButton"]
         var queue = [application]
         var visited: [AXUIElement] = []
         var index = 0
         var matches: [AXUIElement] = []
+        var diagnostics: [String] = []
         while index < queue.count, visited.count < 2500 {
             let element = queue[index]; index += 1
             if visited.contains(where: { CFEqual($0, element) }) { continue }
             visited.append(element)
             if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
-            let labels = [axString(element, "AXTitle"), axString(element, "AXDescription")]
+            let labels = [axString(element, "AXTitle"), axString(element, "AXDescription"), axString(element, "AXHelp")]
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let hints = labels.filter { $0.contains("レイアウト") || $0.lowercased().contains("layout") || $0 == "空白" || $0 == "Blank" }
+            if !hints.isEmpty, diagnostics.count < 8 {
+                let role = axString(element, "AXRole")
+                let enabled = (axValue(element, "AXEnabled") as? Bool).map { $0 ? "有効" : "無効" } ?? "有効属性なし"
+                diagnostics.append("\(role)／\(enabled)／\(hints.map { String($0.prefix(80)) }.joined(separator: ", "))")
+            }
             if roles.contains(axString(element, "AXRole")),
                (axValue(element, "AXEnabled") as? Bool) == true,
-               labels.contains(where: { names.contains($0) }) { matches.append(element) }
+               labels.contains(where: { text in names.contains { name in text == name || text.hasPrefix(name + " (") || text.hasPrefix(name + "（") } }) { matches.append(element) }
             queue.append(contentsOf: axElements(element, "AXChildren"))
         }
         guard index >= queue.count, matches.count == 1, let item = matches.first else {
-            throw AutomationFailure(message: "『\(target)』を一意に取得できません（\(matches.count)件）。新規スライドは追加済みの可能性があります。Kindleは送っていません。Chromeで手動でレイアウト→空白を選び、位置を確認してください。")
+            throw AutomationFailure(message: "『\(target)』を一意に取得できません（\(matches.count)件）。新規スライドは追加済みの可能性があります。Kindleは送っていません。Chromeで手動でレイアウト→空白を選び、位置を確認してください。候補: \(diagnostics.isEmpty ? "なし" : diagnostics.joined(separator: " | "))")
         }
         return item
     }
