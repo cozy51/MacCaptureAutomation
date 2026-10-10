@@ -348,10 +348,11 @@ extension AutomationModel {
                 guard actionReadResult == .success, let names = actions as? [String] else {
                     throw AutomationFailure(message: "背景設定メニューの操作一覧を取得できません（AXエラー \(actionReadResult.rawValue)）。操作は実行していません。")
                 }
-                // Menu items may expose AXPick instead of the button action AXPress.
-                guard let action = ["AXPick", "AXPress"].first(where: { names.contains($0) }) else {
+                // Chrome menu items can expose AXConfirm, AXPick, or AXPress.
+                // AXShowMenu and AXCancel must never be treated as selection actions.
+                guard let action = ["AXConfirm", "AXPick", "AXPress"].first(where: { names.contains($0) }) else {
                     let published = names.isEmpty ? "なし" : names.joined(separator: ", ")
-                    throw AutomationFailure(message: "背景設定メニューにAXPick/AXPressがありません。公開操作: \(published)。操作は実行していません。")
+                    throw AutomationFailure(message: "背景設定メニューにAXConfirm/AXPick/AXPressがありません。公開操作: \(published)。操作は実行していません。")
                 }
                 capture.record("背景設定メニューの公開操作: \(names.joined(separator: ", "))。使用操作: \(action)")
                 try await checkpoint()
