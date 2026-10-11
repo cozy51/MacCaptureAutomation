@@ -709,7 +709,9 @@ extension AutomationModel {
                 }
             }
             if selection != lastSelection {
-                capture.record("『\(targetName)』メニューの選択項目：\(selection.isEmpty ? "取得できません" : selection)")
+                if !continuousRunning {
+                    capture.record("『\(targetName)』メニューの選択項目：\(selection.isEmpty ? "取得できません" : selection)")
+                }
                 lastSelection = selection
             }
             if selected.count == 1, CFEqual(selected[0], target) {
@@ -753,8 +755,10 @@ extension AutomationModel {
                 } else {
                     direction = destination.y > current.y ? 125 : 126
                 }
-                capture.record("レイアウト座標：現在 (\(current.x), \(current.y))／空白 (\(destination.x), \(destination.y))")
-                capture.record("レイアウト一覧：『\(selection)』から\(direction == 124 ? "右" : direction == 123 ? "左" : direction == 125 ? "下" : "上")矢印を送信します。")
+                if !continuousRunning {
+                    capture.record("レイアウト座標：現在 (\(current.x), \(current.y))／空白 (\(destination.x), \(destination.y))")
+                    capture.record("レイアウト一覧：『\(selection)』から\(direction == 124 ? "右" : direction == 123 ? "左" : direction == 125 ? "下" : "上")矢印を送信します。")
+                }
             }
             try sendKey(direction, flags: [], app: chrome)
             try await wait(0.08)
@@ -1189,6 +1193,8 @@ extension AutomationModel {
                 guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限が必要です。") }
                 var previousCaptureFingerprint: SHA256.Digest?
                 var configuredBlankLayout = false
+                var pageActiveStarted = 0.0
+                var completedPageSeconds = 0.0
                 for cycle in 0..<repetitions {
                     var image: NSImage?
                     var copiedChangeCount: Int?
@@ -1240,7 +1246,14 @@ extension AutomationModel {
                             try verifySlides(chrome, expectedURL: config.presentationURL)
                             markProcedureMutation()
                             try await performBackground(capture: capture, chrome: chrome, config: config, shortcut: shortcut, manualMenu: false)
-                            if continuous { continuousDispatchedPages += 1 }
+                            if continuous {
+                                continuousDispatchedPages += 1
+                                updateElapsed()
+                                let seconds = max(0, activeElapsed - pageActiveStarted)
+                                completedPageSeconds += seconds
+                                pageActiveStarted = activeElapsed
+                                capture.record("連続処理：\(continuousDispatchedPages)/\(continuousTargetPages)ページの操作送信完了、所要\(String(format: "%.1f", seconds))秒（一時停止時間を除く・結果未確認）。")
+                            }
                         case "キーボード操作", "ページ送り":
                             let app = try await activate(step.applicationID, delay: config.switchDelay)
                             if step.applicationID == "com.google.Chrome" { try verifySlides(app, expectedURL: config.presentationURL) }
@@ -1276,6 +1289,10 @@ extension AutomationModel {
                     : "編集手順の全操作が完了しました。"
                 UserDefaults.standard.set(procedureStatus, forKey: "procedureResultStage.v1")
                 operation = procedureStatus; capture.record(procedureStatus)
+                if continuous, continuousDispatchedPages > 0 {
+                    let average = completedPageSeconds / Double(continuousDispatchedPages)
+                    capture.record("連続処理の速度：平均\(String(format: "%.1f", average))秒/ページ、参考速度\(Int(3600 / max(average, 0.1)))ページ/時。実際の成功数はスライドの結果確認が必要です。")
+                }
             } catch is CancellationError {
                 procedureStatus = "編集手順を停止しました。続きは自動再開しません。"
                 operation = procedureStatus; capture.record(procedureStatus)
