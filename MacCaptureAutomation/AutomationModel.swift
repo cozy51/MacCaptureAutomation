@@ -117,6 +117,9 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var windowLayout = WindowLayout.restore()
     @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
     @Published var continuousPages = 2
+    @Published var continuousBlankLayoutOnce = UserDefaults.standard.object(forKey: "continuousBlankLayoutOnce.v1") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(continuousBlankLayoutOnce, forKey: "continuousBlankLayoutOnce.v1") }
+    }
     @Published var continuousPageDelay = UserDefaults.standard.object(forKey: "continuousPageDelay.v1") as? Double ?? 0.6 {
         didSet { UserDefaults.standard.set(continuousPageDelay, forKey: "continuousPageDelay.v1") }
     }
@@ -928,14 +931,18 @@ extension AutomationModel {
         setNavigationStage("空白レイアウトの設定要求済み・結果未確認・Kindle未送信")
         capture.record("空白レイアウトをキーボードで選択しました。入力欄がないことは結果確認時に確認してください。")
     }
-    private func addBlankSlide(capture: CaptureModel, chrome: NSRunningApplication, expectedURL: String) async throws {
+    private func addBlankSlide(capture: CaptureModel, chrome: NSRunningApplication, expectedURL: String, configureLayout: Bool = true) async throws {
         let application = try await openSlideMenu(capture: capture, chrome: chrome, expectedURL: expectedURL,
                                                   expectedItems: ["新しいスライド", "新規スライド", "New slide"])
         try await executeMenuWithKeyboard(capture: capture, chrome: chrome, application: application, expectedURL: expectedURL,
                                           names: ["新しいスライド", "新規スライド", "New slide"])
         try await wait(0.5)
         capture.record("新規スライド追加の操作をキーボードで送信しました。")
-        try await applyBlankLayout(capture: capture, chrome: chrome, expectedURL: expectedURL)
+        if configureLayout {
+            try await applyBlankLayout(capture: capture, chrome: chrome, expectedURL: expectedURL)
+        } else {
+            capture.record("連続処理：前の空白レイアウトを引き継ぎ、空白設定の再操作を省略しました。")
+        }
     }
     private func focusedSlideList(_ application: AXUIElement) throws -> (AXUIElement, AXUIElement) {
         guard var current = focusedElement(application) else {
@@ -1154,6 +1161,7 @@ extension AutomationModel {
         let config = settings
         let shortcut = menuShortcut
         guard config.switchDelay.isFinite, (0...60).contains(config.switchDelay) else { capture.record("切り替え待機は0〜60秒にしてください。"); return }
+        let blankLayoutOnce = continuous && continuousBlankLayoutOnce
         resetExecutionFocus(); save(); running = true; paused = false; progress = 0; started = Date()
         if continuous {
             continuousRunning = true
@@ -1166,6 +1174,7 @@ extension AutomationModel {
             do {
                 guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限が必要です。") }
                 var previousCaptureFingerprint: SHA256.Digest?
+                var configuredBlankLayout = false
                 for cycle in 0..<repetitions {
                     var image: NSImage?
                     var copiedChangeCount: Int?
@@ -1233,7 +1242,9 @@ extension AutomationModel {
                             try verifySlides(chrome, expectedURL: config.presentationURL)
                             if step.kind == "スライドの追加" {
                                 markProcedureMutation()
-                                try await addBlankSlide(capture: capture, chrome: chrome, expectedURL: config.presentationURL)
+                                try await addBlankSlide(capture: capture, chrome: chrome, expectedURL: config.presentationURL,
+                                                       configureLayout: !blankLayoutOnce || !configuredBlankLayout)
+                                configuredBlankLayout = true
                             } else {
                                 markProcedureMutation()
                                 try sendKey(step.kind == "スライドの複製" ? 2 : 125,

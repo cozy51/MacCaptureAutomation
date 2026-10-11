@@ -111,6 +111,9 @@ struct AutomationView: View {
                     }
                     Text("大量処理向け：切り替え0.2秒・貼り付け0.8秒・ページ送り0.6秒。まず5ページで確認し、描画が間に合わない場合は対応する待機を増やしてください。")
                         .foregroundStyle(.secondary)
+                    Toggle("連続処理の空白設定は最初の追加時のみ", isOn: $automation.continuousBlankLayoutOnce)
+                    Text("以降は新規スライドが空白レイアウトを引き継ぐ前提で省略します。入力枠が残る場合はオフにしてください。実行を開始するたびに最初の追加時は設定します。")
+                        .foregroundStyle(.secondary)
                     Picker("次のスライドの準備方法", selection: $automation.slideNavigationMode) {
                         ForEach(SlideNavigationMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }
