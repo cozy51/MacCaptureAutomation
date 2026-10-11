@@ -104,6 +104,13 @@ struct AutomationView: View {
                         Text("貼り付け後待機（秒）")
                         TextField("秒", value: $automation.settings.pasteDelay, format: .number).frame(width: 90)
                     }
+                    HStack {
+                        Text("連続処理のページ送り後待機（秒）")
+                        TextField("秒", value: $automation.continuousPageDelay, format: .number).frame(width: 90)
+                        Button("大量処理向け待機を設定") { automation.optimizeContinuousTiming() }
+                    }
+                    Text("大量処理向け：切り替え0.2秒・貼り付け0.8秒・ページ送り0.6秒。まず5ページで確認し、描画が間に合わない場合は対応する待機を増やしてください。")
+                        .foregroundStyle(.secondary)
                     Picker("次のスライドの準備方法", selection: $automation.slideNavigationMode) {
                         ForEach(SlideNavigationMode.allCases) { mode in Text(mode.title).tag(mode) }
                     }

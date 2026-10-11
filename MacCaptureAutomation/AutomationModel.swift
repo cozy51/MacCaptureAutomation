@@ -117,6 +117,16 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var windowLayout = WindowLayout.restore()
     @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
     @Published var continuousPages = 2
+    @Published var continuousPageDelay = UserDefaults.standard.object(forKey: "continuousPageDelay.v1") as? Double ?? 0.6 {
+        didSet { UserDefaults.standard.set(continuousPageDelay, forKey: "continuousPageDelay.v1") }
+    }
+    func optimizeContinuousTiming() {
+        guard !running else { return }
+        settings.switchDelay = 0.2
+        settings.pasteDelay = 0.8
+        continuousPageDelay = 0.6
+        save()
+    }
     @Published private(set) var continuousDispatchedPages = 0
     @Published private(set) var continuousRunning = false
     @Published private(set) var continuousTargetPages = 0
@@ -293,6 +303,7 @@ final class AutomationModel: ObservableObject {
     private func activate(_ id: String, delay: Double) async throws -> NSRunningApplication {
         try await checkpoint()
         let app = try application(id)
+        let needsActivation = NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier
         if lastTargetApplication?.processIdentifier != app.processIdentifier { lastTargetWindow = nil }
         lastTargetApplication = app
         if NSWorkspace.shared.frontmostApplication?.processIdentifier != app.processIdentifier {
@@ -329,7 +340,7 @@ final class AutomationModel: ObservableObject {
                 }
             }
         }
-        try await wait(delay)
+        if needsActivation { try await wait(delay) }
         try verifyFrontmost(app)
         lastTargetWindow = try focusedWindow(app)
         return app
@@ -1092,7 +1103,8 @@ extension AutomationModel {
     }
     func startContinuous(capture: CaptureModel) {
         guard (1...500).contains(continuousPages), settings.pasteDelay.isFinite,
-              (0...60).contains(settings.pasteDelay), (0...2).contains(menuShortcut) else {
+              (0...60).contains(settings.pasteDelay), continuousPageDelay.isFinite,
+              (0...60).contains(continuousPageDelay), (0...2).contains(menuShortcut) else {
             capture.record("ページ数1〜500、貼り付け待機0〜60秒、メニュー表示キーを確認してください。"); return
         }
         guard capture.selected != nil, CGPreflightScreenCaptureAccess(),
@@ -1102,15 +1114,15 @@ extension AutomationModel {
         var steps: [ProcedureStep] = []
         for page in 0..<continuousPages {
             if page > 0 {
-                steps.append(ProcedureStep(kind: "スライドの追加", delay: 1))
-                steps.append(ProcedureStep(kind: "ページ送り", delay: 1, applicationID: settings.kindleID, keyCode: 125))
+                steps.append(ProcedureStep(kind: "スライドの追加", delay: 0))
+                steps.append(ProcedureStep(kind: "ページ送り", delay: continuousPageDelay, applicationID: settings.kindleID, keyCode: 125))
             }
             steps += [
-                ProcedureStep(kind: "アプリ切り替え", applicationID: settings.kindleID),
-                ProcedureStep(kind: "キャプチャ"),
-                ProcedureStep(kind: "クリップボードへコピー"),
-                ProcedureStep(kind: "貼り付け", delay: max(1, settings.pasteDelay)),
-                ProcedureStep(kind: "画像を背景に設定", delay: 1)
+                ProcedureStep(kind: "アプリ切り替え", delay: 0, applicationID: settings.kindleID),
+                ProcedureStep(kind: "キャプチャ", delay: 0),
+                ProcedureStep(kind: "クリップボードへコピー", delay: 0),
+                ProcedureStep(kind: "貼り付け", delay: settings.pasteDelay),
+                ProcedureStep(kind: "画像を背景に設定", delay: 0)
             ]
         }
         runProcedure(Procedure(name: "連続処理（\(continuousPages)ページ）", steps: steps), capture: capture, continuous: true)
