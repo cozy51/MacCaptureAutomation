@@ -146,7 +146,7 @@ struct ProcedureEditor: View {
                 Button("手順ファイルを読み込む") { store.importProcedure() }
             }.disabled(automation.running || capture.busy)
             Text("ファイルには現在の編集内容を保存します。読み込みは別手順として追加されます。実行用の保存には「手順を保存」を押してください。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.system(size: 20)).foregroundStyle(.secondary)
             Text(store.message).textSelection(.enabled)
             if let index = store.procedures.firstIndex(where: { $0.id == store.selectedID }) {
                 TextField("手順名", text: $store.procedures[index].name).textFieldStyle(.roundedBorder)

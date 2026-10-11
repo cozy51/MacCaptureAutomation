@@ -18,7 +18,7 @@ struct AutomationView: View {
                     Button(capture.rangeOverlayVisible ? "範囲枠を隠す" : "範囲を画面で確認") { capture.toggleRangeOverlay() }
                     Button("撮影をテスト") { Task { await capture.capture() } }
                 }.disabled(capture.selected == nil || automation.running || capture.busy)
-                Text("貼り付け先のGoogleスライドURL").font(.callout.bold())
+                Text("貼り付け先のGoogleスライドURL").font(.system(size: 20, weight: .semibold))
                 TextField("https://docs.google.com/presentation/d/…", text: $automation.settings.presentationURL)
                     .textFieldStyle(.roundedBorder).disabled(automation.running)
                 Text("撮影 → 貼り付け → 背景設定 → 次ページ。1ページ目は現在のスライドに入り、続きは新しいスライドを追加します。")
@@ -46,7 +46,7 @@ struct AutomationView: View {
                         .disabled(automation.running || capture.busy)
                 }
                 Text("画面構成・表示スケール・対象スライドが保存時と違う場合は復元しません。フルスクリーンを解除して使ってください。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
             }.padding(8)
         }
     }
@@ -86,7 +86,7 @@ struct AutomationView: View {
                 Text(automation.globalShortcutsAvailable
                      ? "一時停止／再開：⌃⌥⌘P　停止：⌃⌥⌘S（Kindle・Chromeが前面でも使用できます）"
                      : "操作ショートカットを登録できません。画面の停止ボタンを使用してください。")
-                    .font(.caption).foregroundStyle(automation.globalShortcutsAvailable ? Color.secondary : Color.orange)
+                    .font(.system(size: 20)).foregroundStyle(automation.globalShortcutsAvailable ? Color.secondary : Color.orange)
                 if !automation.canRunPlanPage && !automation.running && !automation.procedureResultPending {
                     Text("開始できない場合は、未確認の操作結果やウィンドウ配置を確認してください。")
                         .foregroundStyle(.orange)

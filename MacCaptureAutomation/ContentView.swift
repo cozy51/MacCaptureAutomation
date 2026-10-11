@@ -12,8 +12,10 @@ struct ContentView: View {
     private let pages = ["ダッシュボード", "キャプチャ設定", "自動処理", "操作エディタ", "プリセット", "実行履歴", "環境設定"]
     var body: some View {
         NavigationSplitView {
-            List(pages, id: \.self, selection: $page) { item in Text(item).font(.system(size: 16)).tag(item) }
+            List(pages, id: \.self, selection: $page) { item in Text(item).font(.system(size: 20)).tag(item) }
                 .navigationTitle("画面キャプチャ")
+            .navigationSplitViewColumnWidth(min: 220, ideal: 240)
+            .controlSize(.large)
         } detail: {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -32,7 +34,7 @@ struct ContentView: View {
                             logView
                         }
                     }
-                }.padding(28).font(.system(size: 16))
+                }.padding(28).font(.system(size: 20)).controlSize(.large)
             }.background(Color.white)
         }
         .onChange(of: model.selectedID) { _, _ in model.preview = nil; model.needsAdjustment = false; model.persist() }
@@ -75,7 +77,7 @@ struct ContentView: View {
                         .foregroundStyle(.orange)
                 }
                 Label(kindleRunning ? "Kindle 起動中" : "Kindle 未検出", systemImage: "book")
-                Text("検出対象：\(automation.settings.kindleID)").font(.caption).textSelection(.enabled)
+                Text("検出対象：\(automation.settings.kindleID)").font(.system(size: 20)).textSelection(.enabled)
                 Label(chromeRunning ? "Chrome 起動中" : "Chrome 未検出", systemImage: "globe")
                 Text("画面収録：\(model.screenPermission ? "許可済み" : "未許可") ／ アクセシビリティ：\(model.accessibilityPermission ? "許可済み" : "未許可")")
                 Text("撮影範囲：\(model.selected?.name ?? "未選択")")
@@ -111,7 +113,7 @@ struct ContentView: View {
             Button(model.rangeOverlayVisible ? "画面上の範囲枠を隠す" : "選択範囲を画面に表示") { model.toggleRangeOverlay() }
                 .disabled(model.selected == nil)
             Text("青い枠で保存済み範囲を表示します。枠の表示中も背後のアプリを操作できます。")
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.system(size: 20)).foregroundStyle(.secondary)
         }.disabled(model.busy || automation.running)
     }
     private func metadata(_ preset: CapturePreset) -> some View {
@@ -145,10 +147,10 @@ struct ContentView: View {
                 Button("履歴をファイルに保存") { exportHistory() }
                     .disabled(model.logs.isEmpty || automation.running || model.busy)
                 if !historyExportMessage.isEmpty {
-                    Text(historyExportMessage).font(.caption).textSelection(.enabled)
+                    Text(historyExportMessage).font(.system(size: 20)).textSelection(.enabled)
                 }
                 Text("コピーするとクリップボードの内容が履歴のテキストに置き換わります。実行中はコピーできません。")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.system(size: 20)).foregroundStyle(.secondary)
                 if model.logs.isEmpty { Text("ログはありません").foregroundStyle(.secondary) }
                 ForEach(Array(model.logs.enumerated()), id: \.offset) { _, entry in Text(entry).textSelection(.enabled) }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(8)
@@ -174,8 +176,8 @@ struct ContentView: View {
     private var permissions: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("画面収録: \(model.screenPermission ? "許可済み" : "未許可")")
-            Text("実行中のアプリ：\(Bundle.main.bundleURL.path)").font(.callout).textSelection(.enabled)
-            Text("識別子：\(Bundle.main.bundleIdentifier ?? "不明")").font(.callout).textSelection(.enabled)
+            Text("実行中のアプリ：\(Bundle.main.bundleURL.path)").font(.system(size: 20)).textSelection(.enabled)
+            Text("識別子：\(Bundle.main.bundleIdentifier ?? "不明")").font(.system(size: 20)).textSelection(.enabled)
             Text("更新のたびに許可が外れる場合は、同じApple Development署名と同じインストール先を使ってください。READMEの『許可設定を繰り返さないための運用』を参照してください。")
                 .foregroundStyle(.secondary)
             Button("画面収録の許可を要求") { model.requestScreenPermission() }
