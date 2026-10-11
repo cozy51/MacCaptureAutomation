@@ -546,8 +546,8 @@ extension AutomationModel {
             return title.range(of: pattern, options: .regularExpression) != nil
         }
     }
-    private func namedMenuItems(_ application: AXUIElement, names: [String]) async throws -> [AXUIElement] {
-        var pending = [application]
+    private func namedMenuItems(_ application: AXUIElement, names: [String], scope: AXUIElement? = nil) async throws -> [AXUIElement] {
+        var pending = [scope ?? application]
         var visited: [AXUIElement] = []
         var matches: [AXUIElement] = []
         while let element = pending.popLast() {
@@ -633,14 +633,23 @@ extension AutomationModel {
     }
     private func executeMenuWithKeyboard(capture: CaptureModel, chrome: NSRunningApplication,
                                          application: AXUIElement, expectedURL: String, names: [String],
-                                         upward: Bool = false, openSubmenu: Bool = false, background: Bool = false) async throws {
+                                         upward: Bool = false, openSubmenu: Bool = false, background: Bool = false,
+                                         resolvedTarget: AXUIElement? = nil) async throws {
         let targetName = names.first ?? "メニュー項目"
         let started = Date()
         defer { capture.record("『\(targetName)』のメニュー操作時間：\(String(format: "%.1f", Date().timeIntervalSince(started)))秒") }
         capture.record("『\(targetName)』を\(upward ? "上" : "下")矢印で探索します。")
         // Resolve uniqueness once per open menu, not once per arrow key.
         // Keep reading live focus and target validity; rescan before activation.
-        let initialItems = try await namedMenuItems(application, names: names)
+        let searchScope = background ? resolvedTarget.flatMap { parentMenu($0) } : nil
+        func searchTargets() async throws -> [AXUIElement] {
+            if let searchScope, axString(searchScope, "AXRole") == "AXMenu" {
+                let scoped = try await namedMenuItems(application, names: names, scope: searchScope)
+                if !scoped.isEmpty { return scoped }
+            }
+            return try await namedMenuItems(application, names: names)
+        }
+        let initialItems = try await searchTargets()
         guard initialItems.count == 1, var target = initialItems.first else {
             throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(initialItems.count)件）。Enterは送信していません。")
         }
@@ -656,7 +665,7 @@ extension AutomationModel {
             if axString(target, "AXRole") != "AXMenuItem"
                 || (axValue(target, "AXEnabled") as? Bool) != true
                 || ![axString(target, "AXTitle"), axString(target, "AXDescription")].contains(where: { menuTitleMatches($0, names: names) }) {
-                let refreshed = try await namedMenuItems(application, names: names)
+                let refreshed = try await searchTargets()
                 guard refreshed.count == 1, let replacement = refreshed.first else {
                     throw AutomationFailure(message: "『\(targetName)』が変わり、一意に取得できません（\(refreshed.count)件）。Enterは送信していません。")
                 }
@@ -674,7 +683,7 @@ extension AutomationModel {
             if let focused = focusedElement(application), isFocusedTarget(focused) {
                 try await checkpoint()
                 try verifySlides(chrome, expectedURL: expectedURL)
-                let refreshedTargets = try await namedMenuItems(application, names: names)
+                let refreshedTargets = try await searchTargets()
                 guard refreshedTargets.count == 1,
                       let confirmed = focusedElement(application), isFocusedTarget(confirmed) else {
                     throw AutomationFailure(message: "『\(targetName)』のフォーカスまたは一意性が変わりました。Enterは送信していません。")
@@ -723,7 +732,7 @@ extension AutomationModel {
             if selected.count == 1, CFEqual(selected[0], target) {
                 // Re-read immediately before Enter. Never execute by an assumed row number.
                 try verifySlides(chrome, expectedURL: expectedURL)
-                let refreshedTargets = try await namedMenuItems(application, names: names)
+                let refreshedTargets = try await searchTargets()
                 let confirmed = keyboardSelectedMenuItems(menu, application: application)
                 guard refreshedTargets.count == 1, confirmed.count == 1, CFEqual(confirmed[0], target), (axValue(target, "AXEnabled") as? Bool) == true else {
                     throw AutomationFailure(message: "『\(targetName)』の選択が変わりました。Enterは送信していません。")
@@ -780,7 +789,9 @@ extension AutomationModel {
             try await wait(5)
         } else {
             operation = "画像選択状態を確認"
-            if try await selectedImage(application) {
+            if continuousRunning {
+                capture.record("連続処理：画像選択の全体探索を省略し、有効な背景設定項目を確認します。")
+            } else if try await selectedImage(application) {
                 capture.record("Accessibility APIで選択画像を確認しました。")
             } else {
                 capture.record("画像選択情報は取得できません。メニュー表示後の有効な背景設定項目を確認してから実行します。")
@@ -801,12 +812,21 @@ extension AutomationModel {
             default:
                 throw AutomationFailure(message: "メニュー表示キーの設定が無効です。")
             }
-            try await wait(1)
         }
         if !continuousRunning { progress = max(progress, 0.8) }
         try verifySlides(chrome, expectedURL: config.presentationURL)
         operation = "背景設定メニューを検索"
-        let items = try await backgroundMenuItems(application)
+        let menuDeadline = Date().addingTimeInterval(2)
+        var items: [AXUIElement] = []
+        repeat {
+            try await wait(0.08)
+            try verifySlides(chrome, expectedURL: config.presentationURL)
+            if let focused = focusedElement(application), let menu = parentMenu(focused), axString(menu, "AXRole") == "AXMenu" {
+                items = try await namedMenuItems(application, names: ["画像を背景に設定", "Set image as background"], scope: menu)
+            }
+            if items.isEmpty { items = try await backgroundMenuItems(application) }
+            if !items.isEmpty { break }
+        } while Date() < menuDeadline
         guard items.count == 1, let item = items.first else {
             throw AutomationFailure(message: "有効な『画像を背景に設定』メニューを一意に取得できません（\(items.count)件）。画像を選択し、メニュー表示キーを変更して試してください。手動メニュー方式も利用できます。背景設定操作は実行していません。")
         }
@@ -829,11 +849,16 @@ extension AutomationModel {
             }
             capture.record("\(action)要求が受理されました。背景化の成功はまだ未確認です。")
         } else {
-            try await executeMenuWithKeyboard(capture: capture, chrome: chrome, application: application, expectedURL: config.presentationURL, names: ["画像を背景に設定", "Set image as background"], upward: true, background: true)
+            try await executeMenuWithKeyboard(capture: capture, chrome: chrome, application: application, expectedURL: config.presentationURL, names: ["画像を背景に設定", "Set image as background"], upward: true, background: true, resolvedTarget: item)
         }
-        try await wait(0.5)
-        try verifySlides(chrome, expectedURL: config.presentationURL)
-        let remaining = try await backgroundMenuItems(application)
+        let closeDeadline = Date().addingTimeInterval(1.5)
+        var remaining: [AXUIElement] = []
+        repeat {
+            try await wait(0.08)
+            try verifySlides(chrome, expectedURL: config.presentationURL)
+            remaining = try await backgroundMenuItems(application)
+            if remaining.isEmpty { break }
+        } while Date() < closeDeadline
         guard remaining.isEmpty else {
             throw AutomationFailure(message: "背景設定後もメニューが残っています。再実行せず、結果を手動確認してください。")
         }
