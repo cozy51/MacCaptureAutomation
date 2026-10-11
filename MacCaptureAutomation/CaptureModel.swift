@@ -30,7 +30,11 @@ struct CapturePreset: Identifiable, Codable {
 @MainActor
 final class CaptureModel: ObservableObject {
     @Published var presets: [CapturePreset] = []
-    @Published var selectedID: UUID?
+    @Published var selectedID: UUID? {
+        didSet { if oldValue != selectedID { hideRangeOverlay() } }
+    }
+    @Published private(set) var rangeOverlayVisible = false
+    private let rangeOverlay = SavedRangeOverlay()
     @Published var preview: NSImage?
     private(set) var captureFingerprint: SHA256.Digest?
     @Published var message = "キャプチャ範囲を選択してください。"
@@ -82,6 +86,7 @@ final class CaptureModel: ObservableObject {
 
     func chooseRegion(replacing: Bool = false) {
         guard !busy, selection == nil else { return }
+        hideRangeOverlay()
         let oldID = replacing ? selectedID : nil
         selection = SelectionCoordinator { [weak self] screen, rect in
             guard let self else { return }
@@ -106,6 +111,33 @@ final class CaptureModel: ObservableObject {
         guard !busy, let selectedID else { return }
         presets.removeAll { $0.id == selectedID }
         self.selectedID = presets.first?.id; preview = nil; persist()
+    }
+
+    func hideRangeOverlay() {
+        rangeOverlay.hide()
+        rangeOverlayVisible = false
+    }
+
+    func toggleRangeOverlay() {
+        if rangeOverlayVisible { hideRangeOverlay(); return }
+        guard !busy, selection == nil, let preset = selected else { return }
+        guard let screen = NSScreen.screens.first(where: { $0.stableID == preset.displayUUID }),
+              screen.displayID == preset.displayID, SavedRect(screen.frame) == preset.displayFrame,
+              CGDisplayPixelsWide(screen.displayID) == preset.pixelWidth,
+              CGDisplayPixelsHigh(screen.displayID) == preset.pixelHeight,
+              screen.backingScaleFactor == preset.scale else {
+            needsAdjustment = true
+            record("ディスプレイ構成が変わりました。範囲を再設定してから表示してください。")
+            return
+        }
+        let rect = preset.absoluteRect.rect
+        guard rect.minX.isFinite, rect.minY.isFinite, rect.width.isFinite, rect.height.isFinite,
+              rect.width >= 2, rect.height >= 2, screen.frame.contains(rect) else {
+            record("保存済み範囲が画面外です。再設定してください。")
+            return
+        }
+        rangeOverlay.show(rect: rect)
+        rangeOverlayVisible = true
     }
 
     func capture() async {

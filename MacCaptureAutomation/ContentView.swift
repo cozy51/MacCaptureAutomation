@@ -37,6 +37,7 @@ struct ContentView: View {
         }
         .onChange(of: model.selectedID) { _, _ in model.preview = nil; model.needsAdjustment = false; model.persist() }
         .onAppear { refreshDashboard() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in model.hideRangeOverlay() }
         .onChange(of: automation.settings.kindleID) { _, _ in refreshDashboard() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshDashboard() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in refreshDashboard() }
@@ -107,6 +108,10 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent).disabled(model.selected == nil)
                 if model.busy { ProgressView().controlSize(.small) }
             }
+            Button(model.rangeOverlayVisible ? "画面上の範囲枠を隠す" : "選択範囲を画面に表示") { model.toggleRangeOverlay() }
+                .disabled(model.selected == nil)
+            Text("青い枠で保存済み範囲を表示します。枠の表示中も背後のアプリを操作できます。")
+                .font(.caption).foregroundStyle(.secondary)
         }.disabled(model.busy || automation.running)
     }
     private func metadata(_ preset: CapturePreset) -> some View {

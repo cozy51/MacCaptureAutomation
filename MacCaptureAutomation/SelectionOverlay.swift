@@ -1,6 +1,42 @@
 import AppKit
 
 @MainActor
+final class SavedRangeOverlay {
+    private var window: NSWindow?
+    func show(rect: CGRect) {
+        hide()
+        let frame = rect.insetBy(dx: -4, dy: -4)
+        let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        panel.level = .screenSaver
+        panel.backgroundColor = .clear
+        panel.isOpaque = false
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
+        panel.contentView = SavedRangeBorder(frame: CGRect(origin: .zero, size: frame.size))
+        window = panel
+        panel.orderFrontRegardless()
+    }
+    func hide() {
+        window?.orderOut(nil)
+        window?.close()
+        window = nil
+    }
+}
+
+private final class SavedRangeBorder: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        // Draw outside the saved rectangle, keeping the captured content clear.
+        let path = NSBezierPath(rect: bounds.insetBy(dx: 2, dy: 2))
+        NSColor.systemBlue.setStroke()
+        path.lineWidth = 3
+        path.stroke()
+    }
+}
+
+@MainActor
 final class SelectionCoordinator {
     private var windows: [NSWindow] = []
     private var completion: ((NSScreen?, CGRect?) -> Void)?
