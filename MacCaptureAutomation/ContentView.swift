@@ -39,6 +39,10 @@ struct ContentView: View {
         }
         .onChange(of: model.selectedID) { _, _ in model.preview = nil; model.needsAdjustment = false; model.persist() }
         .onAppear { refreshDashboard() }
+        .onChange(of: automation.running) { _, running in
+            if running { model.showRangeOverlay() }
+            else { model.hideRangeOverlay() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in model.hideRangeOverlay() }
         .onChange(of: automation.settings.kindleID) { _, _ in refreshDashboard() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in refreshDashboard() }

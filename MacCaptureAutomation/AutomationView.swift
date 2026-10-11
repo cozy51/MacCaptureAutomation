@@ -8,6 +8,7 @@ struct AutomationView: View {
     @State private var showTests = false
     @State private var newSlideAtStart = false
     @State private var advanceKindleAtStart = true
+    @State private var urlPasteMessage = ""
     private var needsTestConfirmation: Bool {
         !automation.procedureResultPending && (automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || automation.plan.active)
     }
@@ -23,6 +24,10 @@ struct AutomationView: View {
                 Text("貼り付け先のGoogleスライドURL").font(.system(size: 20, weight: .semibold))
                 TextField("https://docs.google.com/presentation/d/…", text: $automation.settings.presentationURL)
                     .textFieldStyle(.roundedBorder).disabled(automation.running)
+                Button("クリップボードからURLを貼り付け") {
+                    urlPasteMessage = automation.pastePresentationURLFromClipboard()
+                }.disabled(automation.running)
+                if !urlPasteMessage.isEmpty { Text(urlPasteMessage) }
                 Text("撮影 → 貼り付け → 背景設定 → 次ページ。1ページ目は現在のスライドに入り、続きは新しいスライドを追加します。")
                     .foregroundStyle(.secondary)
             }.padding(8)

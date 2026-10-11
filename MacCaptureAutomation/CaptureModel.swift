@@ -120,7 +120,12 @@ final class CaptureModel: ObservableObject {
 
     func toggleRangeOverlay() {
         if rangeOverlayVisible { hideRangeOverlay(); return }
-        guard !busy, selection == nil, let preset = selected else { return }
+        showRangeOverlay()
+    }
+
+    func showRangeOverlay() {
+        if rangeOverlayVisible { return }
+        guard selection == nil, let preset = selected else { return }
         guard let screen = NSScreen.screens.first(where: { $0.stableID == preset.displayUUID }),
               screen.displayID == preset.displayID, SavedRect(screen.frame) == preset.displayFrame,
               CGDisplayPixelsWide(screen.displayID) == preset.pixelWidth,

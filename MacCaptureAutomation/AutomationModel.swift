@@ -197,6 +197,20 @@ final class AutomationModel: ObservableObject {
         }
         globalShortcutsAvailable = hotkeys?.available == true
     }
+    func pastePresentationURLFromClipboard() -> String {
+        guard !running else { return "処理中はURLを変更できません。" }
+        guard let text = NSPasteboard.general.string(forType: .string) else {
+            return "クリップボードにURLの文字列がありません。"
+        }
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard presentationID(value) != nil else {
+            return "GoogleスライドのURLをコピーしてください。"
+        }
+        settings.presentationURL = value
+        save()
+        return "GoogleスライドのURLを貼り付けて保存しました。"
+    }
+
     func save() {
         UserDefaults.standard.set(menuShortcut, forKey: "backgroundMenuShortcut.v1")
         UserDefaults.standard.set(slideNavigationMode.rawValue, forKey: "slideNavigationMode.v1")
