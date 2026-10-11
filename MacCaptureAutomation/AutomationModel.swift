@@ -1157,7 +1157,7 @@ extension AutomationModel {
         while procedureResultPending { try await wait(0.05) }
         try await checkpoint()
     }
-    func startContinuous(capture: CaptureModel) {
+    func startContinuous(capture: CaptureModel, newSlideAtStart: Bool = false, advanceKindleAtStart: Bool = false) {
         guard (1...500).contains(continuousPages), settings.pasteDelay.isFinite,
               (0...60).contains(settings.pasteDelay), continuousPageDelay.isFinite,
               (0...60).contains(continuousPageDelay), (0...2).contains(menuShortcut) else {
@@ -1168,6 +1168,12 @@ extension AutomationModel {
             capture.record("撮影範囲・画面収録権限・対象スライドURLを確認してください。"); return
         }
         var steps: [ProcedureStep] = []
+        if newSlideAtStart {
+            steps.append(ProcedureStep(kind: "スライドの追加", delay: 0))
+            if advanceKindleAtStart {
+                steps.append(ProcedureStep(kind: "ページ送り", delay: continuousPageDelay, applicationID: settings.kindleID, keyCode: 125))
+            }
+        }
         for page in 0..<continuousPages {
             if page > 0 {
                 steps.append(ProcedureStep(kind: "スライドの追加", delay: 0))

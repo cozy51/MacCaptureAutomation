@@ -6,6 +6,8 @@ struct AutomationView: View {
     @State private var showTiming = false
     @State private var showLayout = false
     @State private var showTests = false
+    @State private var newSlideAtStart = false
+    @State private var advanceKindleAtStart = true
     private var needsTestConfirmation: Bool {
         !automation.procedureResultPending && (automation.pasteUncertain || automation.backgroundUncertain || automation.readyForNextPage || automation.navigationUncertain || automation.plan.active)
     }
@@ -62,7 +64,22 @@ struct AutomationView: View {
                     .disabled(automation.running)
                 Text("終了後に全ページの対応・重複・抜け・背景設定を確認してください。最後はページ送りをせず終了します。")
                     .foregroundStyle(.secondary)
-                Button("\(automation.continuousPages)ページの処理を開始") { automation.startContinuous(capture: capture) }
+                Picker("開始位置", selection: $newSlideAtStart) {
+                    Text("現在のスライドから").tag(false)
+                    Text("続きから（新しいスライドを追加）").tag(true)
+                }.disabled(automation.running)
+                if newSlideAtStart {
+                    Toggle("開始前にKindleも次のページへ進める", isOn: $advanceKindleAtStart)
+                        .disabled(automation.running)
+                    Text(advanceKindleAtStart
+                         ? "前回の最後のページを表示したまま開始してください。新しいスライドを追加し、Kindleを1ページ進めてから撮影します。"
+                         : "Kindleは自分で撮影開始ページに合わせてください。新しいスライドを追加し、現在のKindleページから撮影します。")
+                        .foregroundStyle(.secondary)
+                }
+                Button(newSlideAtStart ? "続きの\(automation.continuousPages)ページを開始" : "\(automation.continuousPages)ページの処理を開始") {
+                    automation.startContinuous(capture: capture, newSlideAtStart: newSlideAtStart,
+                                               advanceKindleAtStart: advanceKindleAtStart)
+                }
                     .buttonStyle(.borderedProminent)
                     .disabled(!automation.canRunPlanPage || automation.plan.active || capture.busy)
                 Text("処理済み：\(automation.continuousDispatchedPages)ページ（結果は終了後に確認）")
