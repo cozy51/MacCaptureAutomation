@@ -613,16 +613,29 @@ extension AutomationModel {
                                          application: AXUIElement, expectedURL: String, names: [String],
                                          upward: Bool = false, openSubmenu: Bool = false, background: Bool = false) async throws {
         let targetName = names.first ?? "メニュー項目"
+        let started = Date()
+        defer { capture.record("『\(targetName)』のメニュー操作時間：\(String(format: "%.1f", Date().timeIntervalSince(started)))秒") }
         capture.record("『\(targetName)』を\(upward ? "上" : "下")矢印で探索します。")
+        // Resolve uniqueness once per open menu, not once per arrow key.
+        // Keep reading live focus and target validity; rescan before activation.
+        let initialItems = try await namedMenuItems(application, names: names)
+        guard initialItems.count == 1, var target = initialItems.first else {
+            throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(initialItems.count)件）。Enterは送信していません。")
+        }
         var lastSelection = ""
         var unreadableSelections = 0
         var stalledGridSelections = 0
         for index in 0..<80 {
             try await checkpoint()
             try verifySlides(chrome, expectedURL: expectedURL)
-            let liveItems = try await namedMenuItems(application, names: names)
-            guard liveItems.count == 1, let target = liveItems.first else {
-                throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(liveItems.count)件）。メニューが開いているか確認してください。Enterは送信していません。")
+            if axString(target, "AXRole") != "AXMenuItem"
+                || (axValue(target, "AXEnabled") as? Bool) != true
+                || ![axString(target, "AXTitle"), axString(target, "AXDescription")].contains(where: { menuTitleMatches($0, names: names) }) {
+                let refreshed = try await namedMenuItems(application, names: names)
+                guard refreshed.count == 1, let replacement = refreshed.first else {
+                    throw AutomationFailure(message: "『\(targetName)』が変わり、一意に取得できません（\(refreshed.count)件）。Enterは送信していません。")
+                }
+                target = replacement
             }
             // A focused layout choice can be reparented from AXTable to the
             // toolbar popup. Confirm its unique name and live focus before
@@ -683,8 +696,9 @@ extension AutomationModel {
             if selected.count == 1, CFEqual(selected[0], target) {
                 // Re-read immediately before Enter. Never execute by an assumed row number.
                 try verifySlides(chrome, expectedURL: expectedURL)
+                let refreshedTargets = try await namedMenuItems(application, names: names)
                 let confirmed = keyboardSelectedMenuItems(menu, application: application)
-                guard confirmed.count == 1, CFEqual(confirmed[0], target), (axValue(target, "AXEnabled") as? Bool) == true else {
+                guard refreshedTargets.count == 1, confirmed.count == 1, CFEqual(confirmed[0], target), (axValue(target, "AXEnabled") as? Bool) == true else {
                     throw AutomationFailure(message: "『\(targetName)』の選択が変わりました。Enterは送信していません。")
                 }
                 if background {
