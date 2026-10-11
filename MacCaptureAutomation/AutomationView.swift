@@ -30,7 +30,12 @@ struct AutomationView: View {
     private var continuousControls: some View {
         GroupBox("連続処理（結果を最後にまとめて確認）") {
             VStack(alignment: .leading, spacing: 12) {
-                Stepper("処理ページ数：\(automation.continuousPages)", value: $automation.continuousPages, in: 1...500)
+                HStack {
+                    Text("処理ページ数")
+                    TextField("ページ数", value: $automation.continuousPages, format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder).frame(width: 90)
+                    Text("ページ（1〜500）").foregroundStyle(.secondary)
+                }
                     .disabled(automation.running)
                 Text("現在のスライドに1ページ目を貼り付け、以降は新規スライドを追加して空白レイアウトにします。最後は追加・ページ送りをせず終了します。")
                 Text("スライド追加・空白レイアウト選択・背景設定はマウスクリックを使わず、メニュー項目の選択を確認してキーで実行します。")

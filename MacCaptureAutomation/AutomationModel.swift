@@ -116,7 +116,13 @@ final class AutomationModel: ObservableObject {
     @Published private(set) var globalShortcutsAvailable = false
     @Published private(set) var windowLayout = WindowLayout.restore()
     @Published private(set) var layoutNeedsReview = UserDefaults.standard.bool(forKey: "layoutNeedsReview.v1")
-    @Published var continuousPages = 2
+    @Published var continuousPages = (UserDefaults.standard.object(forKey: "continuousPages.v1") as? Int).flatMap { (1...500).contains($0) ? $0 : nil } ?? 2 {
+        didSet {
+            if (1...500).contains(continuousPages) {
+                UserDefaults.standard.set(continuousPages, forKey: "continuousPages.v1")
+            }
+        }
+    }
     @Published var continuousBlankLayoutOnce = UserDefaults.standard.object(forKey: "continuousBlankLayoutOnce.v1") as? Bool ?? true {
         didSet { UserDefaults.standard.set(continuousBlankLayoutOnce, forKey: "continuousBlankLayoutOnce.v1") }
     }
