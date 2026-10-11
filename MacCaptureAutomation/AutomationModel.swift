@@ -164,6 +164,7 @@ final class AutomationModel: ObservableObject {
     private var resumePresentationURL = ""
     private var needsResumeActivation = false
     private var restoringResumeFocus = false
+    private var verifiedNewSlideShortcut = false
     private let storageKey = "automationSettings.v1"
     private var combinedBackgroundPending = UserDefaults.standard.bool(forKey: "combinedBackgroundPending.v1")
 
@@ -244,6 +245,7 @@ final class AutomationModel: ObservableObject {
         activeElapsed = max(0, elapsed - pausedDuration - currentPause)
     }
     private func resetExecutionFocus() {
+        verifiedNewSlideShortcut = false
         lastTargetApplication = nil; lastTargetWindow = nil
         needsResumeActivation = false; restoringResumeFocus = false
         resumePresentationURL = settings.presentationURL
@@ -636,6 +638,9 @@ extension AutomationModel {
         guard initialItems.count == 1, var target = initialItems.first else {
             throw AutomationFailure(message: "『\(targetName)』を一意に取得できません（\(initialItems.count)件）。Enterは送信していません。")
         }
+        if names.contains("新しいスライド") {
+            verifiedNewSlideShortcut = axString(target, "AXTitle").hasSuffix(" Ctrl+M")
+        }
         var lastSelection = ""
         var unreadableSelections = 0
         var stalledGridSelections = 0
@@ -932,6 +937,15 @@ extension AutomationModel {
         capture.record("空白レイアウトをキーボードで選択しました。入力欄がないことは結果確認時に確認してください。")
     }
     private func addBlankSlide(capture: CaptureModel, chrome: NSRunningApplication, expectedURL: String, configureLayout: Bool = true) async throws {
+        if continuousRunning, !configureLayout, verifiedNewSlideShortcut {
+            try await checkpoint()
+            try verifySlides(chrome, expectedURL: expectedURL)
+            try sendKey(46, flags: [.maskControl], app: chrome)
+            try await wait(0.5)
+            try verifySlides(chrome, expectedURL: expectedURL)
+            capture.record("連続処理：メニューで確認したControl＋Mでスライドを追加しました。追加メニューと空白設定の再操作を省略しました。")
+            return
+        }
         let application = try await openSlideMenu(capture: capture, chrome: chrome, expectedURL: expectedURL,
                                                   expectedItems: ["新しいスライド", "新規スライド", "New slide"])
         try await executeMenuWithKeyboard(capture: capture, chrome: chrome, application: application, expectedURL: expectedURL,
