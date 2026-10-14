@@ -563,31 +563,51 @@ extension AutomationModel {
     private func namedMenuItems(_ application: AXUIElement, names: [String], scope: AXUIElement? = nil) async throws -> [AXUIElement] {
         // Search the live popup before the document tree. Hundreds of Slides
         // thumbnails can exhaust the global budget even with a menu open.
-        // An empty result in a known popup must remain empty: searching the
-        // document could select an unrelated item outside the active menu.
+        // Chrome can keep focus on the top-level menu bar while exposing the
+        // popup elsewhere in AXChildren, so an empty focus scope needs discovery.
         if scope == nil, let focused = focusedElement(application) {
             let role = axString(focused, "AXRole")
             if role == "AXMenu" {
-                return try await namedMenuItems(application, names: names, scope: focused)
+                let items = try await namedMenuItems(application, names: names, scope: focused)
+                if !items.isEmpty { return items }
             }
             if role == "AXMenuItem", let menu = parentMenu(focused) {
-                return try await namedMenuItems(application, names: names, scope: menu)
+                let items = try await namedMenuItems(application, names: names, scope: menu)
+                if !items.isEmpty { return items }
             }
         }
         var pending = [scope ?? application]
+        var next = 0
         var visited: [AXUIElement] = []
         var matches: [AXUIElement] = []
-        while let element = pending.popLast() {
+        while next < pending.count {
+            let element = pending[next]
+            next += 1
             if visited.contains(where: { CFEqual($0, element) }) { continue }
             visited.append(element)
             if visited.count > 2500 { throw AutomationFailure(message: "Chromeのメニュー探索上限に達しました。操作は実行していません。") }
             if visited.count % 25 == 0 { try await checkpoint(); await Task.yield() }
+            let children = axElements(element, "AXChildren")
+            if scope == nil {
+                // Find the popup breadth-first instead of descending through
+                // every slide thumbnail. Web menus wrap each row in AXGroup.
+                let role = axString(element, "AXRole")
+                let rows = children + children.filter { axString($0, "AXRole") == "AXGroup" }
+                    .flatMap { axElements($0, "AXChildren") }
+                if role != "AXMenuBar",
+                   role == "AXMenu" || rows.filter({ axString($0, "AXRole") == "AXMenuItem" }).count >= 2 {
+                    let items = try await namedMenuItems(application, names: names, scope: element)
+                    if !items.isEmpty { return items }
+                    // This popup has no target; avoid traversing it twice.
+                    continue
+                }
+            }
             if axString(element, "AXRole") == "AXMenuItem",
                (axValue(element, "AXEnabled") as? Bool) == true,
                [axString(element, "AXTitle"), axString(element, "AXDescription")].contains(where: { menuTitleMatches($0, names: names) }) {
                 matches.append(element)
             }
-            pending.append(contentsOf: axElements(element, "AXChildren"))
+            pending.append(contentsOf: children)
         }
         return matches
     }
