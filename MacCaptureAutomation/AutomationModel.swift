@@ -561,6 +561,19 @@ extension AutomationModel {
         }
     }
     private func namedMenuItems(_ application: AXUIElement, names: [String], scope: AXUIElement? = nil) async throws -> [AXUIElement] {
+        // Search the live popup before the document tree. Hundreds of Slides
+        // thumbnails can exhaust the global budget even with a menu open.
+        // An empty result in a known popup must remain empty: searching the
+        // document could select an unrelated item outside the active menu.
+        if scope == nil, let focused = focusedElement(application) {
+            let role = axString(focused, "AXRole")
+            if role == "AXMenu" {
+                return try await namedMenuItems(application, names: names, scope: focused)
+            }
+            if role == "AXMenuItem", let menu = parentMenu(focused) {
+                return try await namedMenuItems(application, names: names, scope: menu)
+            }
+        }
         var pending = [scope ?? application]
         var visited: [AXUIElement] = []
         var matches: [AXUIElement] = []
