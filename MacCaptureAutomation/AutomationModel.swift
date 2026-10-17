@@ -320,10 +320,17 @@ final class AutomationModel: ObservableObject {
     }
     private func application(_ id: String) throws -> NSRunningApplication {
         guard AXIsProcessTrusted() else { throw AutomationFailure(message: "アクセシビリティ権限がありません。") }
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first else {
-            throw AutomationFailure(message: "アプリが起動していません: \(id)")
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: id).first(where: { !$0.isTerminated }) {
+            return app
         }
-        return app
+        // The running-application list can briefly miss an app that was just
+        // activated (it is refreshed asynchronously). Keep using the process we
+        // activated last as long as it is still alive.
+        if let last = lastTargetApplication, last.bundleIdentifier == id {
+            if !last.isTerminated { return last }
+            throw AutomationFailure(message: "対象アプリが処理中に終了しました（クラッシュの可能性があります）: \(id)。アプリを起動し直し、ページ位置を確認してから再開してください。")
+        }
+        throw AutomationFailure(message: "アプリが起動していません: \(id)")
     }
     private func activate(_ id: String, delay: Double) async throws -> NSRunningApplication {
         try await checkpoint()
