@@ -81,6 +81,10 @@ struct AutomationView: View {
                          : "Kindleは自分で撮影開始ページに合わせてください。新しいスライドを追加し、現在のKindleページから撮影します。")
                         .foregroundStyle(.secondary)
                 }
+                if automation.procedureResultPending && !automation.running {
+                    Text("前回の処理結果が未確認のため開始できません。スライドとKindleの位置を確認し、下の『処理結果とページ位置を確認済み』を押してから開始してください。")
+                        .foregroundStyle(.orange)
+                }
                 Button(newSlideAtStart ? "続きの\(automation.continuousPages)ページを開始" : "\(automation.continuousPages)ページの処理を開始") {
                     automation.startContinuous(capture: capture, newSlideAtStart: newSlideAtStart,
                                                advanceKindleAtStart: advanceKindleAtStart)
@@ -117,6 +121,7 @@ struct AutomationView: View {
                     Text("実行・停止後は作成されたスライドとKindleの位置を確認してください。不明な操作を再送しないでください。")
                         .foregroundStyle(.orange)
                     Button("処理結果とページ位置を確認済み") { automation.acknowledgeProcedureResult(capture: capture) }
+                        .buttonStyle(.borderedProminent).tint(.orange)
                         .disabled(automation.running)
                 }
                 if automation.procedureResultPending || automation.continuousDispatchedPages > 0 {
